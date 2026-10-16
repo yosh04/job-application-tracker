@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient";
-import { todayISO } from "../types";
+import { todayISO, type CVFile } from "../types";
 import { EVIDENCE_MAX_BYTES, validateCvFile as getCvFileValidationError } from "./validation";
 export { CV_MAX_BYTES, EVIDENCE_MAX_BYTES } from "./validation";
 
@@ -200,6 +200,36 @@ export async function getEvidenceUrl(path: string): Promise<string> {
   if (error) throw error;
   if (!data?.signedUrl) throw new Error("Could not generate a signed URL for this image.");
   return data.signedUrl;
+}
+
+/** Lists files in one application's private folder so missing DB references can be repaired. */
+export async function listApplicationFiles(
+  applicationId: string,
+): Promise<{ evidence: string[]; cv: CVFile | null }> {
+  const client = getClient();
+  const userId = await requireUserId();
+  const folder = `${userId}/${applicationId}`;
+  const { data, error } = await client.storage.from(EVIDENCE_BUCKET).list(folder, {
+    limit: 100,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) throw error;
+  const files = (data ?? []).filter((item) => item.id);
+  const evidence = files
+    .filter((item) => item.name.startsWith("evidence-"))
+    .map((item) => `${folder}/${item.name}`);
+  const cvFile = files
+    .filter((item) => item.name.startsWith("cv-"))
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0];
+  const cv = cvFile
+    ? {
+        path: `${folder}/${cvFile.name}`,
+        name: cvFile.name.replace(/^cv-\d+-/, ""),
+        size: formatFileSize(Number(cvFile.metadata?.size ?? 0)),
+        updatedAt: cvFile.updated_at?.slice(0, 10) ?? todayISO(),
+      }
+    : null;
+  return { evidence, cv };
 }
 
 /** Downloads a private evidence object as a Blob (used for duplication). */

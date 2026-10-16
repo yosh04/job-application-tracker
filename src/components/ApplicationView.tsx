@@ -140,7 +140,7 @@ export function ApplicationView({
   const [draggingEvidence, setDraggingEvidence] = useState(false);
   const [addingEvidence, setAddingEvidence] = useState(false);
   const evidenceInputRef = useRef<HTMLInputElement>(null);
-  const images = app.images ?? [];
+  const storedImages = app.images ?? [];
   const activity = app.activity?.length
     ? [...app.activity].reverse()
     : [
@@ -149,9 +149,27 @@ export function ApplicationView({
         { id: `${app.id}-created`, label: "Postulación creada", createdAt: `${app.createdAt}T12:00:00.000Z` },
       ];
   // Stored evidence resolves to short-lived signed URLs; legacy entries pass through.
-  const { urls: evidenceUrls, loading: evidenceLoading } = useEvidenceUrls(images);
+  const {
+    urls: evidenceUrls,
+    loading: evidenceLoading,
+    images,
+    cv: recoveredCv,
+    error: evidenceError,
+  } = useEvidenceUrls(storedImages, app.id, app.cv);
+  const cv = app.cv ?? recoveredCv;
   const previewUrl = preview !== null ? toDisplayUrl(preview, evidenceUrls) : null;
   const evidenceLimitReached = images.length >= MAX_EVIDENCE_IMAGES;
+
+  useEffect(() => {
+    const missingImages = images.some((image) => !storedImages.includes(image));
+    const missingCvPath = !!recoveredCv?.path && (!app.cv?.path && !app.cv?.dataUrl);
+    if (missingImages || missingCvPath) {
+      onPatch({
+        ...(missingImages ? { images } : {}),
+        ...(missingCvPath ? { cv: recoveredCv } : {}),
+      });
+    }
+  }, [app.cv, images, onPatch, recoveredCv, storedImages]);
 
   const addEvidenceFiles = async (files: File[]) => {
     if (!files.length || addingEvidence || evidenceLimitReached) return;
@@ -466,15 +484,15 @@ export function ApplicationView({
 
           <section>
             <SectionTitle>CV personalizado</SectionTitle>
-            {app.cv ? (
+            {cv ? (
               <div className="overflow-hidden rounded-xl border border-line bg-panel">
                 <div className="flex flex-col items-center px-4 py-7 text-center">
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg border border-brand/25 bg-brand/10 text-brand-soft">
                     <Icon name="file" className="h-5 w-5" />
                   </div>
-                  <p className="max-w-full truncate text-[13.5px] font-medium text-ink">{app.cv.name}</p>
+                  <p className="max-w-full truncate text-[13.5px] font-medium text-ink">{cv.name}</p>
                   <p className="mt-1 font-mono text-[11.5px] text-faint">
-                    PDF · {app.cv.size} · actualizado {shortDate(app.cv.updatedAt)}
+                    PDF · {cv.size} · actualizado {shortDate(cv.updatedAt)}
                   </p>
                   <div className="mt-4 flex gap-2">
                     <Button variant="subtle" size="xs" onClick={onOpenCvModal}>
@@ -508,7 +526,12 @@ export function ApplicationView({
 
           <section>
             <SectionTitle>Capturas / Evidencia · {images.length}</SectionTitle>
-            {evidenceLoading && images.length > 0 && (
+            {evidenceError && (
+              <p role="alert" className="mb-3 rounded-md border border-red-400/20 bg-red-400/5 px-3 py-2 text-[12px] text-red-300">
+                {evidenceError}
+              </p>
+            )}
+            {evidenceLoading && (
               <p className="mb-2 text-[11.5px] text-faint">Cargando imágenes…</p>
             )}
             {images.length > 0 ? (
