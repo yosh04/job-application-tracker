@@ -9,6 +9,7 @@ import { LoginModal } from "./components/LoginModal";
 import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
 import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
+import * as db from "./lib/db";
 import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
 type ModalState =
@@ -22,14 +23,20 @@ type ModalState =
   | { type: null };
 
 export default function App() {
-  const [searches, setSearches] = useState<Search[]>(SEED_SEARCHES);
-  const [apps, setApps] = useState<Application[]>(SEED_APPLICATIONS);
+  // Seeds are the prototype fallback only; a configured backend starts empty
+  // until the workspace loads (empty workspace shows the empty overview, not seeds).
+  const [searches, setSearches] = useState<Search[]>(() => (isSupabaseConfigured ? [] : SEED_SEARCHES));
+  const [apps, setApps] = useState<Application[]>(() => (isSupabaseConfigured ? [] : SEED_APPLICATIONS));
   const [view, setView] = useState<View>({ type: "overview" });
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({ s_frontend: true, s_backend: true, s_remoto: true });
+  const seedExpanded: Record<string, boolean> = { s_frontend: true, s_backend: true, s_remoto: true };
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(
+    isSupabaseConfigured ? {} : seedExpanded,
+  );
   const [drawer, setDrawer] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: null });
   const [toast, setToast] = useState<string | null>(null);
   const [user, setUser] = useState<string | null>(null);
+  const [dbLoading, setDbLoading] = useState(false);
 
   const closeModal = () => setModal({ type: null });
   const notify = useCallback((message: string) => setToast(message), []);
@@ -51,6 +58,43 @@ export default function App() {
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  // Supabase persistence: load the user's workspace when a session starts.
+  // No session (or signed out) -> empty workspace; seeds stay prototype-only.
+  // Seed rows are never migrated automatically.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    if (!user) {
+      setSearches([]);
+      setApps([]);
+      setView({ type: "overview" });
+      return;
+    }
+    let cancelled = false;
+    setDbLoading(true);
+    db.loadWorkspace()
+      .then(({ searches: loaded, applications }) => {
+        if (cancelled) return;
+        setSearches(loaded);
+        setApps(applications);
+        setExpanded((e) => {
+          const next = { ...e };
+          for (const s of loaded) if (!(s.id in next)) next[s.id] = true;
+          return next;
+        });
+        setView({ type: "overview" });
+      })
+      .catch((err) => {
+        console.error("[db] loadWorkspace failed", err);
+        notify("No se pudieron cargar tus datos");
+      })
+      .finally(() => {
+        if (!cancelled) setDbLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, notify]);
 
   const handleLogin = useCallback(
     async (email: string, password: string) => {
@@ -140,23 +184,60 @@ export default function App() {
 
   /* --------------------------------------------------------------- actions */
 
-  const createSearch = (data: { name: string; description: string }) => {
-    const search: Search = { id: uid("s"), name: data.name, description: data.description, createdAt: todayISO() };
-    setSearches((s) => [...s, search]);
-    setExpanded((e) => ({ ...e, [search.id]: true }));
-    closeModal();
-    setView({ type: "dashboard", searchId: search.id });
-    notify(`Búsqueda "${search.name}" creada`);
+  // Prototype (no backend / no session): local uid() rows. With a session:
+  // persist via db.ts and adopt the returned DB uuids as ids.
+  const createSearch = async (data: { name: string; description: string }) => {
+    if (!isSupabaseConfigured || !supabase || !user) {
+      const search: Search = { id: uid("s"), name: data.name, description: data.description, createdAt: todayISO() };
+      setSearches((s) => [...s, search]);
+      setExpanded((e) => ({ ...e, [search.id]: true }));
+      closeModal();
+      setView({ type: "dashboard", searchId: search.id });
+      notify(`Búsqueda "${search.name}" creada`);
+      return;
+    }
+    try {
+      const search = await db.createSearch(data);
+      setSearches((s) => [...s, search]);
+      setExpanded((e) => ({ ...e, [search.id]: true }));
+      closeModal();
+      setView({ type: "dashboard", searchId: search.id });
+      notify(`Búsqueda "${search.name}" creada`);
+    } catch (err) {
+      console.error("[db] createSearch failed", err);
+      notify("No se pudo crear la búsqueda");
+    }
   };
 
-  const updateSearch = (id: string, data: { name: string; description: string }) => {
-    setSearches((s) => s.map((x) => (x.id === id ? { ...x, ...data } : x)));
-    closeModal();
-    notify("Búsqueda actualizada");
+  const updateSearch = async (id: string, data: { name: string; description: string }) => {
+    if (!isSupabaseConfigured || !supabase || !user) {
+      setSearches((s) => s.map((x) => (x.id === id ? { ...x, ...data } : x)));
+      closeModal();
+      notify("Búsqueda actualizada");
+      return;
+    }
+    try {
+      const saved = await db.updateSearch(id, data);
+      setSearches((s) => s.map((x) => (x.id === id ? saved : x)));
+      closeModal();
+      notify("Búsqueda actualizada");
+    } catch (err) {
+      console.error("[db] updateSearch failed", err);
+      notify("No se pudo actualizar la búsqueda");
+    }
   };
 
-  const deleteSearch = (id: string) => {
+  const deleteSearch = async (id: string) => {
     const name = searches.find((s) => s.id === id)?.name ?? "";
+    if (isSupabaseConfigured && supabase && user) {
+      try {
+        await db.deleteSearch(id);
+      } catch (err) {
+        console.error("[db] deleteSearch failed", err);
+        notify("No se pudo eliminar la búsqueda");
+        return;
+      }
+    }
     setSearches((s) => s.filter((x) => x.id !== id));
     setApps((a) => a.filter((x) => x.searchId !== id));
     closeModal();
@@ -165,75 +246,151 @@ export default function App() {
   };
 
   // TODO(supabase): migrate images to Supabase Storage bucket, persist public URLs instead of data-URLs.
-  const patchApp = (id: string, patch: Partial<Application>) =>
+  // Optimistic update keeps the UI snappy; reconcile with the DB row when persisted.
+  const patchApp = (id: string, patch: Partial<Application>) => {
     setApps((list) => list.map((a) => (a.id === id ? { ...a, ...patch, updatedAt: todayISO() } : a)));
+    if (isSupabaseConfigured && supabase && user) {
+      db.patchApplication(id, patch)
+        .then((saved) => setApps((list) => list.map((a) => (a.id === id ? saved : a))))
+        .catch((err) => {
+          console.error("[db] patchApplication failed", err);
+          notify("No se pudo guardar el cambio");
+        });
+    }
+  };
 
-  const saveApplication = (data: Omit<Application, "id" | "createdAt" | "updatedAt">) => {
+  const saveApplication = async (data: Omit<Application, "id" | "createdAt" | "updatedAt">) => {
     // TODO(supabase): upload data-URL images to Supabase Storage bucket on save, store returned URLs.
+    const persisted = isSupabaseConfigured && !!supabase && !!user;
     if (modal.type === "application" && modal.editing) {
       const id = modal.editing.id;
-      setApps((list) => list.map((a) => (a.id === id ? { ...a, ...data, updatedAt: todayISO() } : a)));
-      closeModal();
-      notify("Postulación actualizada");
+      if (!persisted) {
+        setApps((list) => list.map((a) => (a.id === id ? { ...a, ...data, updatedAt: todayISO() } : a)));
+        closeModal();
+        notify("Postulación actualizada");
+        return;
+      }
+      try {
+        const saved = await db.updateApplication(id, data);
+        setApps((list) => list.map((a) => (a.id === id ? saved : a)));
+        closeModal();
+        notify("Postulación actualizada");
+      } catch (err) {
+        console.error("[db] updateApplication failed", err);
+        notify("No se pudo actualizar la postulación");
+      }
       return;
     }
-    const app: Application = {
-      ...data,
-      id: uid("a"),
-      createdAt: todayISO(),
-      updatedAt: todayISO(),
-    };
-    setApps((list) => [app, ...list]);
-    setExpanded((e) => ({ ...e, [app.searchId]: true }));
-    closeModal();
-    setView({ type: "application", id: app.id });
-    notify(`Postulación de ${app.company} creada`);
+    if (!persisted) {
+      const app: Application = {
+        ...data,
+        id: uid("a"),
+        createdAt: todayISO(),
+        updatedAt: todayISO(),
+      };
+      setApps((list) => [app, ...list]);
+      setExpanded((e) => ({ ...e, [app.searchId]: true }));
+      closeModal();
+      setView({ type: "application", id: app.id });
+      notify(`Postulación de ${app.company} creada`);
+      return;
+    }
+    try {
+      const app = await db.createApplication(data);
+      setApps((list) => [app, ...list]);
+      setExpanded((e) => ({ ...e, [app.searchId]: true }));
+      closeModal();
+      setView({ type: "application", id: app.id });
+      notify(`Postulación de ${app.company} creada`);
+    } catch (err) {
+      console.error("[db] createApplication failed", err);
+      notify("No se pudo crear la postulación");
+    }
   };
 
-  const duplicateApp = (id: string) => {
+  const duplicateApp = async (id: string) => {
     const source = apps.find((a) => a.id === id);
     if (!source) return;
-    const copy: Application = {
-      ...source,
-      id: uid("a"),
-      company: `${source.company} (copia)`,
-      points: source.points.map((p) => ({ ...p, id: uid("p") })),
-      images: [...(source.images ?? [])],
-      createdAt: todayISO(),
-      updatedAt: todayISO(),
-    };
-    setApps((list) => [copy, ...list]);
-    notify("Postulación duplicada");
+    if (!isSupabaseConfigured || !supabase || !user) {
+      const copy: Application = {
+        ...source,
+        id: uid("a"),
+        company: `${source.company} (copia)`,
+        points: source.points.map((p) => ({ ...p, id: uid("p") })),
+        images: [...(source.images ?? [])],
+        createdAt: todayISO(),
+        updatedAt: todayISO(),
+      };
+      setApps((list) => [copy, ...list]);
+      notify("Postulación duplicada");
+      return;
+    }
+    try {
+      const copy = await db.duplicateApplication(source);
+      setApps((list) => [copy, ...list]);
+      notify("Postulación duplicada");
+    } catch (err) {
+      console.error("[db] duplicateApplication failed", err);
+      notify("No se pudo duplicar la postulación");
+    }
   };
 
-  const moveApp = (appId: string, targetId: string, newSearchName?: string) => {
+  const moveApp = async (appId: string, targetId: string, newSearchName?: string) => {
     const app = apps.find((a) => a.id === appId);
     if (!app) return;
-    let finalTarget = targetId;
-    let targetName = searches.find((s) => s.id === targetId)?.name ?? "";
+    const persisted = isSupabaseConfigured && !!supabase && !!user;
+    try {
+      let finalTarget = targetId;
+      let targetName = searches.find((s) => s.id === targetId)?.name ?? "";
 
-    if (targetId === "__new__") {
-      const created: Search = {
-        id: uid("s"),
-        name: newSearchName?.trim() || "Nueva búsqueda",
-        description: "",
-        createdAt: todayISO(),
-      };
-      setSearches((s) => [...s, created]);
-      finalTarget = created.id;
-      targetName = created.name;
-      setExpanded((e) => ({ ...e, [created.id]: true }));
+      if (targetId === "__new__") {
+        const name = newSearchName?.trim() || "Nueva búsqueda";
+        if (persisted) {
+          const created = await db.createSearch({ name, description: "" });
+          setSearches((s) => [...s, created]);
+          finalTarget = created.id;
+          targetName = created.name;
+        } else {
+          const created: Search = {
+            id: uid("s"),
+            name,
+            description: "",
+            createdAt: todayISO(),
+          };
+          setSearches((s) => [...s, created]);
+          finalTarget = created.id;
+          targetName = created.name;
+        }
+        setExpanded((e) => ({ ...e, [finalTarget]: true }));
+      }
+
+      if (persisted) {
+        await db.moveApplication(appId, finalTarget);
+      }
+      setApps((list) =>
+        list.map((a) => (a.id === appId ? { ...a, searchId: finalTarget, updatedAt: todayISO() } : a)),
+      );
+      setExpanded((e) => ({ ...e, [finalTarget]: true }));
+      closeModal();
+      if (view.type === "application") setView({ type: "dashboard", searchId: finalTarget });
+      notify(`${app.company} movida a "${targetName}"`);
+    } catch (err) {
+      console.error("[db] moveApplication failed", err);
+      notify("No se pudo mover la postulación");
     }
-
-    patchApp(appId, { searchId: finalTarget });
-    setExpanded((e) => ({ ...e, [finalTarget]: true }));
-    closeModal();
-    if (view.type === "application") setView({ type: "dashboard", searchId: finalTarget });
-    notify(`${app.company} movida a "${targetName}"`);
   };
 
-  const deleteApp = (id: string) => {
+  const deleteApp = async (id: string) => {
     const app = apps.find((a) => a.id === id);
+    if (isSupabaseConfigured && supabase && user) {
+      try {
+        await db.deleteApplication(id);
+      } catch (err) {
+        console.error("[db] deleteApplication failed", err);
+        notify("No se pudo eliminar la postulación");
+        return;
+      }
+    }
     setApps((list) => list.filter((a) => a.id !== id));
     closeModal();
     const searchId = app?.searchId;
@@ -242,21 +399,77 @@ export default function App() {
   };
 
   const pointHandlers = {
-    onAddPoint: (title: string, content: string) => {
+    onAddPoint: async (title: string, content: string) => {
       if (!currentApp) return;
-      const point: InterestPoint = { id: uid("p"), title, content };
-      patchApp(currentApp.id, { points: [...currentApp.points, point] });
-      notify("Punto de interés agregado");
+      const appId = currentApp.id;
+      if (!isSupabaseConfigured || !supabase || !user) {
+        const point: InterestPoint = { id: uid("p"), title, content };
+        patchApp(appId, { points: [...currentApp.points, point] });
+        notify("Punto de interés agregado");
+        return;
+      }
+      try {
+        const point = await db.addPoint(appId, title, content);
+        setApps((list) =>
+          list.map((a) =>
+            a.id === appId ? { ...a, points: [...a.points, point], updatedAt: todayISO() } : a,
+          ),
+        );
+        notify("Punto de interés agregado");
+      } catch (err) {
+        console.error("[db] addPoint failed", err);
+        notify("No se pudo agregar el punto");
+      }
     },
-    onSavePoint: (pointId: string, title: string, content: string) => {
+    onSavePoint: async (pointId: string, title: string, content: string) => {
       if (!currentApp) return;
-      patchApp(currentApp.id, { points: currentApp.points.map((p) => (p.id === pointId ? { ...p, title, content } : p)) });
-      notify("Punto actualizado");
+      const appId = currentApp.id;
+      if (!isSupabaseConfigured || !supabase || !user) {
+        patchApp(appId, { points: currentApp.points.map((p) => (p.id === pointId ? { ...p, title, content } : p)) });
+        notify("Punto actualizado");
+        return;
+      }
+      try {
+        await db.savePoint(pointId, title, content);
+        setApps((list) =>
+          list.map((a) =>
+            a.id === appId
+              ? {
+                  ...a,
+                  points: a.points.map((p) => (p.id === pointId ? { ...p, title, content } : p)),
+                  updatedAt: todayISO(),
+                }
+              : a,
+          ),
+        );
+        notify("Punto actualizado");
+      } catch (err) {
+        console.error("[db] savePoint failed", err);
+        notify("No se pudo actualizar el punto");
+      }
     },
-    onDeletePoint: (pointId: string) => {
+    onDeletePoint: async (pointId: string) => {
       if (!currentApp) return;
-      patchApp(currentApp.id, { points: currentApp.points.filter((p) => p.id !== pointId) });
-      notify("Punto eliminado");
+      const appId = currentApp.id;
+      if (!isSupabaseConfigured || !supabase || !user) {
+        patchApp(appId, { points: currentApp.points.filter((p) => p.id !== pointId) });
+        notify("Punto eliminado");
+        return;
+      }
+      try {
+        await db.deletePoint(pointId);
+        setApps((list) =>
+          list.map((a) =>
+            a.id === appId
+              ? { ...a, points: a.points.filter((p) => p.id !== pointId), updatedAt: todayISO() }
+              : a,
+          ),
+        );
+        notify("Punto eliminado");
+      } catch (err) {
+        console.error("[db] deletePoint failed", err);
+        notify("No se pudo eliminar el punto");
+      }
     },
   };
 
@@ -386,6 +599,10 @@ export default function App() {
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="pointer-events-none fixed inset-x-0 top-0 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(59,130,246,0.07),transparent_70%)]" />
 
+          {dbLoading ? (
+            <div className="p-10 text-center text-muted">Cargando tus datos…</div>
+          ) : (
+            <>
           {view.type === "overview" && (
             <>
               {locked && (
@@ -474,6 +691,8 @@ export default function App() {
             ) : (
               <div className="p-10 text-center text-muted">Esta postulación ya no existe.</div>
             ))}
+            </>
+          )}
         </main>
       </div>
 
