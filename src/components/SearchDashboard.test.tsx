@@ -67,6 +67,38 @@ describe("SearchDashboard", () => {
     expect(screen.queryByText("Globex")).toBeNull();
   });
 
+  it("keeps search actions right-aligned and the options menu visible on mobile", async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchDashboard
+        search={search}
+        applications={applications}
+        onOpenApplication={vi.fn()}
+        onNewApplication={vi.fn()}
+        onRenameSearch={vi.fn()}
+        onDeleteSearch={vi.fn()}
+        onEdit={vi.fn()}
+        onStatusChange={vi.fn()}
+        onDuplicate={vi.fn()}
+        onMove={vi.fn()}
+        onDelete={vi.fn()}
+        onOpenCv={vi.fn()}
+      />,
+    );
+
+    const optionsButton = screen.getByRole("button", { name: "Más opciones" });
+    const dropdown = optionsButton.closest(".relative");
+    const actions = dropdown?.parentElement;
+    expect(actions?.className).toContain("w-full");
+    expect(actions?.className).toContain("justify-end");
+    expect(actions?.className).toContain("flex-row-reverse");
+    expect(within(actions as HTMLElement).getByRole("button", { name: /Nueva postulación/ })).toBeTruthy();
+
+    await user.click(optionsButton);
+    expect(screen.getByRole("menuitem", { name: "Editar búsqueda" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Eliminar búsqueda" })).toBeTruthy();
+  });
+
   it("offers the requested actions on mobile application cards", () => {
     const onEdit = vi.fn();
     const onMove = vi.fn();

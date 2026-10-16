@@ -105,7 +105,7 @@ export function SearchDashboard({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="relative z-30 ml-auto flex w-full flex-row-reverse items-center justify-end gap-2 sm:w-auto sm:flex-row">
           <Dropdown
             trigger={(open) => (
               <IconButton label="Más opciones" className={cn(open && "bg-white/8 text-ink")}>
