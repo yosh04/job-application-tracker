@@ -16,6 +16,7 @@ import {
 } from "./ui";
 import { longDate, shortDate, STATUSES, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
 import { ConfirmModal } from "./Modals";
+import { toDisplayUrl, useEvidenceUrls } from "../lib/useEvidenceUrls";
 
 function InfoRow({ label, value, mono, icon }: { label: string; value?: string; mono?: boolean; icon?: string }) {
   return (
@@ -131,6 +132,9 @@ export function ApplicationView({
   const [preview, setPreview] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<number | null>(null);
   const images = app.images ?? [];
+  // Stored evidence resolves to short-lived signed URLs; legacy entries pass through.
+  const { urls: evidenceUrls, loading: evidenceLoading } = useEvidenceUrls(images);
+  const previewUrl = preview !== null ? toDisplayUrl(preview, evidenceUrls) : null;
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-5 py-7 sm:px-8 sm:py-9">
@@ -467,26 +471,38 @@ export function ApplicationView({
 
           <section>
             <SectionTitle>Capturas / Evidencia · {images.length}</SectionTitle>
+            {evidenceLoading && images.length > 0 && (
+              <p className="mb-2 text-[11.5px] text-faint">Cargando imágenes…</p>
+            )}
             {images.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
-                {images.map((src, i) => (
-                  <div key={i} className="group relative overflow-hidden rounded-lg border border-line">
-                    <button onClick={() => setPreview(src)} className="block w-full" aria-label={`Ver evidencia ${i + 1}`}>
-                      <img
-                        src={src}
-                        alt={`Evidencia ${i + 1}`}
-                        className="h-28 w-full object-cover transition-opacity hover:opacity-90"
-                      />
-                    </button>
-                    <button
-                      onClick={() => setPendingImage(i)}
-                      className="absolute top-1.5 right-1.5 rounded-full bg-black/70 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500/90"
-                      aria-label={`Quitar imagen ${i + 1}`}
-                    >
-                      <Icon name="x" className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
+                {images.map((src, i) => {
+                  const display = toDisplayUrl(src, evidenceUrls);
+                  return (
+                    <div key={i} className="group relative overflow-hidden rounded-lg border border-line">
+                      {display ? (
+                        <button onClick={() => setPreview(src)} className="block w-full" aria-label={`Ver evidencia ${i + 1}`}>
+                          <img
+                            src={display}
+                            alt={`Evidencia ${i + 1}`}
+                            className="h-28 w-full object-cover transition-opacity hover:opacity-90"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex h-28 w-full items-center justify-center bg-elev text-[11px] text-faint">
+                          {evidenceLoading ? "Cargando…" : "Sin vista previa"}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => setPendingImage(i)}
+                        className="absolute top-1.5 right-1.5 rounded-full bg-black/70 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500/90"
+                        aria-label={`Quitar imagen ${i + 1}`}
+                      >
+                        <Icon name="x" className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-line2 bg-surface/40 px-4 py-6 text-center">
@@ -494,26 +510,32 @@ export function ApplicationView({
                 <p className="mt-1 text-[11.5px] text-faint">Edita la postulación para adjuntar capturas de la oferta.</p>
               </div>
             )}
-            {preview && (
+            {preview !== null && (
               <div
                 className="anim-fade fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
                 onClick={() => setPreview(null)}
               >
-                <img
-                  src={preview}
-                  alt="Evidencia ampliada"
-                  className="anim-pop max-h-[85vh] max-w-full rounded-lg border border-line2"
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <a
-                  href={preview}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-md border border-line2 bg-elev px-3 py-1.5 text-[12px] text-ink hover:border-brand/50"
-                >
-                  Abrir en pestaña nueva
-                </a>
+                {previewUrl ? (
+                  <img
+                    src={previewUrl}
+                    alt="Evidencia ampliada"
+                    className="anim-pop max-h-[85vh] max-w-full rounded-lg border border-line2"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <p className="text-[13px] text-muted">Cargando imagen…</p>
+                )}
+                {previewUrl && (
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-md border border-line2 bg-elev px-3 py-1.5 text-[12px] text-ink hover:border-brand/50"
+                  >
+                    Abrir en pestaña nueva
+                  </a>
+                )}
               </div>
             )}
             <ConfirmModal

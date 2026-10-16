@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { cn } from "../utils/cn";
 import { Button, Icon, Input, Label, Modal, Select, Textarea } from "./ui";
+import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
+import { deleteCv, downloadCv, formatFileSize, getCvUrl, uploadCv } from "../lib/storage";
+import { isStorageEvidencePath, uploadEvidence } from "../lib/storage";
+import { toDisplayUrl, useEvidenceUrls } from "../lib/useEvidenceUrls";
 import { STATUSES, MAX_EVIDENCE_IMAGES, longDate, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
 
 /* --------------------------------------------------------- search modal */
@@ -109,6 +113,8 @@ export function ApplicationModal({
     points: InterestPoint[];
     cv: Application["cv"];
     images: string[];
+    /** Files picked for a not-yet-created application; App uploads them post-create. */
+    newImageFiles?: File[];
   }) => void;
 }) {
   const [form, setForm] = useState({
@@ -126,8 +132,21 @@ export function ApplicationModal({
   const [pt, setPt] = useState({ title: "", content: "" });
   const [cv, setCv] = useState<Application["cv"]>(null);
   const [images, setImages] = useState<string[]>([]);
+  // Files picked for a new (unsaved) application: no applicationId exists yet,
+  // so they preview via object URLs and upload in App.saveApplication post-create.
+  const [pending, setPending] = useState<{ id: string; file: File; preview: string }[]>([]);
   const [imgWarning, setImgWarning] = useState<string | null>(null);
+  const [imgUploading, setImgUploading] = useState(false);
   const [pendingImg, setPendingImg] = useState<number | null>(null);
+
+  // Prototype fallback (no backend): data-URLs, no real upload.
+  const backend = isSupabaseConfigured && !!supabase;
+  // Resolve signed URLs for stored evidence paths (private bucket).
+  const { urls: evidenceUrls, loading: evidenceLoading } = useEvidenceUrls(backend ? images : []);
+
+  const revokePending = (list: { preview: string }[]) => {
+    list.forEach((p) => URL.revokeObjectURL(p.preview));
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -145,38 +164,102 @@ export function ApplicationModal({
     setPoints(editing?.points ? editing.points.map((p) => ({ ...p })) : []);
     setCv(editing?.cv ?? null);
     setImages(editing?.images ? [...editing.images].slice(0, MAX_EVIDENCE_IMAGES) : []);
+    setPending((prev) => {
+      revokePending(prev);
+      return [];
+    });
     setPt({ title: "", content: "" });
     setImgWarning(null);
+    setImgUploading(false);
   }, [open, editing, defaultSearchId, searches]);
 
   const valid = form.company.trim() && form.position.trim();
-  const imagesFull = images.length >= MAX_EVIDENCE_IMAGES;
+  const totalImages = images.length + pending.length;
+  const imagesFull = totalImages >= MAX_EVIDENCE_IMAGES;
 
-  // TODO(supabase): migrate to Supabase Storage bucket — upload files and store public URLs instead of data-URLs.
-  const handleImageFiles = (files: FileList | null) => {
+  // Evidence images (Fase 3, slice 2): images[] stores Storage paths for new
+  // uploads; legacy data-URLs / http URLs render directly (see storage.ts).
+  // - Prototype (!backend): previous data-URL behavior, unchanged.
+  // - Editing with backend: upload on select (same as the CV flow); the
+  //   applicationId already exists. Cancelling afterwards may orphan the
+  //   uploaded object — accepted, consistent with CV uploads.
+  // - Creating with backend: no applicationId yet, so files preview via
+  //   object URLs and upload in App.saveApplication right after create.
+  const handleImageFiles = async (files: FileList | null) => {
     if (!files) return;
-    const remaining = MAX_EVIDENCE_IMAGES - images.length;
+    const remaining = MAX_EVIDENCE_IMAGES - totalImages;
     if (remaining <= 0) {
       setImgWarning(`Máximo ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
       return;
     }
     const selected = Array.from(files).slice(0, remaining);
     if (files.length > remaining) setImgWarning(`Máximo ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
-    selected.forEach((file) => {
-      if (file.size > 2 * 1024 * 1024)
-        setImgWarning("Archivo grande (>2 MB): se guarda solo en este prototipo y puede ralentizar la app");
-      const reader = new FileReader();
-      reader.onload = () => {
-        const url = typeof reader.result === "string" ? reader.result : null;
-        if (!url) return;
-        setImages((prev) => (prev.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, url]));
-      };
-      reader.readAsDataURL(file);
+    else setImgWarning(null);
+
+    // Prototype fallback: keep data-URL behavior, no real upload.
+    if (!backend || !supabase) {
+      selected.forEach((file) => {
+        if (file.size > 2 * 1024 * 1024)
+          setImgWarning("Archivo grande (>2 MB): se guarda solo en este prototipo y puede ralentizar la app");
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = typeof reader.result === "string" ? reader.result : null;
+          if (!url) return;
+          setImages((prev) =>
+            prev.length + pending.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, url],
+          );
+        };
+        reader.readAsDataURL(file);
+      });
+      return;
+    }
+
+    // New application: stage files locally, upload after create.
+    if (!editing) {
+      setPending((prev) => {
+        const room = MAX_EVIDENCE_IMAGES - images.length - prev.length;
+        const staged = selected.slice(0, Math.max(room, 0)).map((file, i) => ({
+          id: `pending_${Date.now()}_${i}`,
+          file,
+          preview: URL.createObjectURL(file),
+        }));
+        return [...prev, ...staged];
+      });
+      return;
+    }
+
+    // Editing: upload on select into the existing application folder.
+    setImgUploading(true);
+    setImgWarning(null);
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userId = data.user?.id;
+      if (!userId) throw new Error("No active session.");
+      for (const file of selected) {
+        try {
+          const path = await uploadEvidence(userId, editing.id, file);
+          setImages((prev) => (prev.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, path]));
+        } catch (err) {
+          setImgWarning(err instanceof Error ? err.message : "Image upload failed.");
+        }
+      }
+    } catch (err) {
+      setImgWarning(err instanceof Error ? err.message : "Image upload failed.");
+    } finally {
+      setImgUploading(false);
+    }
+  };
+
+  const removePending = (id: string) => {
+    setPending((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((p) => p.id !== id);
     });
   };
 
   const submit = () => {
-    if (!valid) return;
+    if (!valid || imgUploading) return;
     onSave({
       ...form,
       company: form.company.trim(),
@@ -185,6 +268,7 @@ export function ApplicationModal({
       points,
       cv,
       images: images.slice(0, MAX_EVIDENCE_IMAGES),
+      ...(pending.length > 0 ? { newImageFiles: pending.map((p) => p.file) } : {}),
     });
   };
 
@@ -201,8 +285,8 @@ export function ApplicationModal({
             <Button variant="ghost" size="sm" onClick={onClose}>
               Cancelar
             </Button>
-            <Button variant="primary" size="sm" disabled={!valid} onClick={submit}>
-              {editing ? "Guardar cambios" : "Guardar postulación"}
+            <Button variant="primary" size="sm" disabled={!valid || imgUploading} onClick={submit}>
+              {imgUploading ? "Subiendo…" : editing ? "Guardar cambios" : "Guardar postulación"}
             </Button>
           </>
         }
@@ -355,18 +439,43 @@ export function ApplicationModal({
         <div className="rounded-lg border border-line bg-surface/50 p-3.5">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-[11px] font-semibold tracking-[0.14em] text-faint uppercase">
-              Capturas / Evidencia · {images.length}/{MAX_EVIDENCE_IMAGES}
+              Capturas / Evidencia · {totalImages}/{MAX_EVIDENCE_IMAGES}
             </p>
           </div>
-          {images.length > 0 && (
+          {(images.length > 0 || pending.length > 0) && (
             <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {images.map((src, i) => (
-                <div key={i} className="group relative overflow-hidden rounded-md border border-line">
-                  <img src={src} alt={`Evidencia ${i + 1}`} className="h-20 w-full object-cover" />
+              {images.map((src, i) => {
+                const stored = backend && isStorageEvidencePath(src);
+                const display = stored ? toDisplayUrl(src, evidenceUrls) : src;
+                return (
+                  <div key={`img-${i}`} className="group relative overflow-hidden rounded-md border border-line">
+                    {display ? (
+                      <img src={display} alt={`Evidencia ${i + 1}`} className="h-20 w-full object-cover" />
+                    ) : (
+                      <div className="flex h-20 w-full items-center justify-center bg-elev text-[11px] text-faint">
+                        {evidenceLoading ? "Cargando…" : "Sin vista previa"}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => setPendingImg(i)}
+                      className="absolute top-1 right-1 rounded-full bg-black/70 p-1 text-white transition-opacity hover:bg-red-500/90"
+                      aria-label={`Quitar imagen ${i + 1}`}
+                    >
+                      <Icon name="x" className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
+              {pending.map((p) => (
+                <div key={p.id} className="group relative overflow-hidden rounded-md border border-dashed border-brand/40">
+                  <img src={p.preview} alt="Evidencia pendiente" className="h-20 w-full object-cover opacity-90" />
+                  <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[9.5px] text-amber-200/90">
+                    Se sube al guardar
+                  </span>
                   <button
-                    onClick={() => setPendingImg(i)}
+                    onClick={() => removePending(p.id)}
                     className="absolute top-1 right-1 rounded-full bg-black/70 p-1 text-white transition-opacity hover:bg-red-500/90"
-                    aria-label={`Quitar imagen ${i + 1}`}
+                    aria-label="Quitar imagen pendiente"
                   >
                     <Icon name="x" className="h-3 w-3" />
                   </button>
@@ -382,17 +491,21 @@ export function ApplicationModal({
           >
             <Icon name="upload" className="mb-2 h-4 w-4 text-muted" />
             <p className="text-[12.5px] text-ink">
-              {imagesFull ? `Máximo ${MAX_EVIDENCE_IMAGES} imágenes alcanzado` : "Agrega capturas de la oferta"}
+              {imagesFull
+                ? `Máximo ${MAX_EVIDENCE_IMAGES} imágenes alcanzado`
+                : imgUploading
+                  ? "Subiendo imágenes…"
+                  : "Agrega capturas de la oferta"}
             </p>
             <p className="mt-0.5 font-mono text-[10.5px] text-faint">PNG · JPG · máx {MAX_EVIDENCE_IMAGES}</p>
             <input
               type="file"
               accept="image/*"
               multiple
-              disabled={imagesFull}
+              disabled={imagesFull || imgUploading}
               className="hidden"
               onChange={(e) => {
-                handleImageFiles(e.target.files);
+                void handleImageFiles(e.target.files);
                 e.target.value = "";
               }}
             />
@@ -593,34 +706,107 @@ export function CVModal({
   app?: Application | null;
   onSave: (cv: Application["cv"]) => void;
 }) {
-  const [progress, setProgress] = useState<number | null>(null);
   const [draft, setDraft] = useState<Application["cv"]>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadName, setUploadName] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"download" | "delete" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  // Prototype fallback (no backend): metadata only, no real upload.
+  const backend = isSupabaseConfigured && !!supabase;
+  const draftPath = draft?.path ?? null;
+  // Legacy entries predate Storage uploads: metadata only, no preview.
+  const legacy = backend && !!draft && !draftPath;
 
   useEffect(() => {
     if (!open) return;
     setDraft(app?.cv ?? null);
-    setProgress(null);
+    setUploading(false);
+    setUploadName(null);
+    setBusy(null);
+    setError(null);
+    setPreviewUrl(null);
+    setPreviewLoading(false);
   }, [open, app]);
 
-  const simulate = () => {
-    if (progress !== null) return;
-    setProgress(0);
-    const timer = setInterval(() => {
-      setProgress((p) => {
-        const next = (p ?? 0) + Math.random() * 22 + 8;
-        if (next >= 100) {
-          clearInterval(timer);
-          setDraft({
-            name: `CV - ${app?.company ?? "Empresa"}.pdf`,
-            size: "248 KB",
-            updatedAt: todayISO(),
-          });
-          setTimeout(() => setProgress(null), 500);
-          return 100;
-        }
-        return next;
+  // Resolve a short-lived signed URL for stored CVs (private bucket).
+  useEffect(() => {
+    if (!open || !backend || !draftPath) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+    getCvUrl(draftPath)
+      .then((url) => {
+        if (!cancelled) setPreviewUrl(url);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not generate the preview link.");
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
       });
-    }, 160);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, backend, draftPath]);
+
+  const handleFiles = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || uploading) return;
+    setError(null);
+    // Prototype fallback: keep metadata only, no real upload.
+    if (!backend || !supabase) {
+      setDraft({ name: file.name, size: formatFileSize(file.size), updatedAt: todayISO() });
+      return;
+    }
+    if (!app) {
+      setError("No application selected.");
+      return;
+    }
+    setUploading(true);
+    setUploadName(file.name);
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userId = data.user?.id;
+      if (!userId) throw new Error("No active session.");
+      const uploaded = await uploadCv(userId, app.id, file);
+      setDraft(uploaded);
+      setPreviewUrl(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CV upload failed.");
+    } finally {
+      setUploading(false);
+      setUploadName(null);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!draftPath || busy) return;
+    setBusy("download");
+    setError(null);
+    try {
+      await downloadCv(draftPath, draft?.name ?? "cv");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CV download failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (busy) return;
+    setBusy("delete");
+    setError(null);
+    try {
+      if (draftPath && backend) await deleteCv([draftPath]);
+      setDraft(null);
+      setPreviewUrl(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the CV file.");
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (
@@ -634,13 +820,18 @@ export function CVModal({
           <Button variant="ghost" size="sm" onClick={onClose}>
             Cancelar
           </Button>
-          <Button variant="primary" size="sm" disabled={!draft} onClick={() => onSave(draft)}>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!draft || uploading || busy !== null}
+            onClick={() => onSave(draft)}
+          >
             Guardar CV
           </Button>
         </>
       }
     >
-      {app?.cv && draft && progress === null && (
+      {draft && (
         <div className="mb-4 rounded-lg border border-line bg-panel p-5">
           <div className="flex flex-col items-center text-center">
             <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-lg border border-brand/25 bg-brand/10 text-brand-soft">
@@ -648,75 +839,109 @@ export function CVModal({
             </div>
             <p className="text-[14px] font-medium text-ink">{draft.name}</p>
             <p className="mt-1 font-mono text-[11.5px] text-faint">
-              PDF · {draft.size} · actualizado {longDate(draft.updatedAt)}
+              {draft.size} · actualizado {longDate(draft.updatedAt)}
             </p>
-            <div className="mt-4 flex gap-2">
-              <Button variant="outline" size="xs">
-                <Icon name="eye" className="h-3.5 w-3.5" /> Ver
-              </Button>
-              <Button variant="subtle" size="xs" onClick={() => setDraft(null)}>
+            {legacy && (
+              <p className="mt-2 max-w-[320px] text-[11.5px] leading-relaxed text-amber-200/90">
+                Legacy file (no stored copy): replace it to enable preview and download.
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {previewUrl ? (
+                <Button variant="outline" size="xs" onClick={() => window.open(previewUrl, "_blank", "noopener")}>
+                  <Icon name="eye" className="h-3.5 w-3.5" /> Ver
+                </Button>
+              ) : (
+                backend &&
+                !legacy && (
+                  <span className="inline-flex h-7 items-center px-2.5 text-[12px] text-faint">
+                    {previewLoading || uploading ? "Generando enlace…" : "Sin vista previa"}
+                  </span>
+                )
+              )}
+              {backend && draftPath && (
+                <Button variant="outline" size="xs" onClick={() => void handleDownload()} disabled={busy !== null}>
+                  {busy === "download" ? "Descargando…" : "Descargar"}
+                </Button>
+              )}
+              <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-line bg-elev2 px-2.5 text-[12px] text-ink transition-colors hover:border-line2 hover:bg-[#1a2334]">
                 <Icon name="upload" className="h-3.5 w-3.5" /> Reemplazar
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.doc"
+                  className="hidden"
+                  disabled={uploading || busy !== null}
+                  onChange={(e) => {
+                    void handleFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <Button variant="subtle" size="xs" onClick={() => void handleDelete()} disabled={busy !== null}>
+                <Icon name="trash" className="h-3.5 w-3.5" /> {busy === "delete" ? "Quitando…" : "Quitar"}
               </Button>
-            </div>
-          </div>
-          <div className="mt-5 border-t border-line pt-4">
-            <p className="mb-2 text-[10.5px] tracking-[0.14em] text-faint uppercase">Vista previa del documento</p>
-            <div className="space-y-2 rounded-md border border-line bg-surface/60 p-4">
-              {[92, 78, 85, 60, 88, 45, 70].map((w, i) => (
-                <div key={i} className="h-2 rounded-full bg-elev2" style={{ width: `${w}%` }} />
-              ))}
             </div>
           </div>
         </div>
       )}
 
-      {(progress !== null || (!app?.cv && !draft)) && (
-        <div
+      {!draft && (
+        <label
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            simulate();
+            void handleFiles(e.dataTransfer.files);
           }}
           className={cn(
-            "flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors",
-            progress !== null ? "border-brand/60 bg-brand/6" : "border-line2 bg-surface/40 hover:border-brand/45 hover:bg-brand/5",
+            "flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors",
+            uploading ? "border-brand/60 bg-brand/6" : "border-line2 bg-surface/40 hover:border-brand/45 hover:bg-brand/5",
           )}
         >
           <div
             className={cn(
               "mb-3 flex h-12 w-12 items-center justify-center rounded-lg border border-line2 bg-elev",
-              progress !== null ? "text-brand" : "text-muted",
+              uploading ? "text-brand" : "text-muted",
             )}
           >
-            <Icon name={progress !== null ? "trend" : "upload"} className="h-5 w-5" />
+            <Icon name={uploading ? "trend" : "upload"} className="h-5 w-5" />
           </div>
 
-          {progress === null ? (
+          {uploading ? (
             <>
-              <p className="text-[14px] font-medium text-ink">Arrastra tu CV aquí</p>
-              <p className="mt-1 text-[12.5px] text-muted">o</p>
-              <Button variant="primary" size="sm" className="mt-2.5" onClick={simulate}>
-                Seleccionar archivo
-              </Button>
-              <p className="mt-3 font-mono text-[10.5px] text-faint">PDF · DOCX · máx 5 MB</p>
+              <p className="text-[13px] text-ink">Subiendo {uploadName ?? "CV"}…</p>
+              <div className="mt-3 h-1.5 w-full max-w-[240px] overflow-hidden rounded-full bg-elev2">
+                <div className="h-full w-full animate-pulse rounded-full bg-brand" />
+              </div>
             </>
           ) : (
             <>
-              <p className="text-[13px] text-ink">Subiendo CV - {app?.company}.pdf…</p>
-              <div className="mt-3 h-1.5 w-full max-w-[240px] overflow-hidden rounded-full bg-elev2">
-                <div
-                  className="h-full rounded-full bg-brand transition-all duration-200"
-                  style={{ width: `${Math.min(progress, 100)}%` }}
-                />
-              </div>
-              <p className="mt-2 font-mono text-[11px] text-faint">{Math.min(Math.round(progress), 100)}%</p>
+              <p className="text-[14px] font-medium text-ink">Arrastra tu CV aquí</p>
+              <p className="mt-1 text-[12.5px] text-muted">o</p>
+              <span className="mt-2.5 inline-flex h-8.5 items-center rounded-md bg-brand px-3 text-[13px] font-medium text-white">
+                Seleccionar archivo
+              </span>
+              <p className="mt-3 font-mono text-[10.5px] text-faint">PDF · DOCX · máx 5 MB</p>
             </>
           )}
-        </div>
+          <input
+            type="file"
+            accept=".pdf,.docx,.doc"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => {
+              void handleFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
       )}
 
+      {error && <p className="mt-3 text-[12px] leading-relaxed text-red-300">{error}</p>}
+
       <p className="mt-3 text-[11.5px] leading-relaxed text-faint">
-        En el prototipo la carga es simulada: no se suben archivos reales, solo se asocia un CV a esta postulación.
+        {backend
+          ? "Stored in your private Supabase Storage folder. Preview and download use short-lived signed URLs (1h)."
+          : "En el prototipo la carga es simulada: no se suben archivos reales, solo se asocia un CV a esta postulación."}
       </p>
     </Modal>
   );

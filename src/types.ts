@@ -22,6 +22,8 @@ export interface CVFile {
   name: string;
   size: string;
   updatedAt: string;
+  /** Supabase Storage object path (<uid>/<applicationId>/<file>). Absent on legacy metadata-only entries. */
+  path?: string;
 }
 
 export interface Application {
@@ -37,8 +39,8 @@ export interface Application {
   notes: string;
   points: InterestPoint[];
   cv: CVFile | null;
-  // Evidence screenshots as data-URLs (prototype only, client-side).
-  // TODO(supabase): migrate to Supabase Storage bucket and store public URLs here.
+  // Evidence images: Storage object paths for new uploads (see storage.ts
+  // convention), legacy data-URLs / http URLs render directly as before.
   images: string[];
   createdAt: string;
   updatedAt: string;

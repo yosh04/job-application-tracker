@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient";
+import { copyEvidenceToApplication, isStorageEvidencePath } from "./storage";
 import type { Application, CVFile, InterestPoint, Search, Status } from "../types";
 
 // Supabase persistence layer (Fase 2, slice 2: wiring only, UI untouched).
@@ -7,8 +8,9 @@ import type { Application, CVFile, InterestPoint, Search, Status } from "../type
 // - App ids are strings; persisted rows use DB uuid strings (replaces uid()).
 // - App YYYY-MM-DD strings map to DATE columns (applied_at, deadline) and to
 //   the day part of timestamptz columns (created_at, updated_at).
-// - cv passes through as jsonb ({name, size, updatedAt} | null).
-// - images passes through as text[] (data-URLs today, Storage URLs later).
+// - cv passes through as jsonb ({name, size, updatedAt, path?} | null).
+// - images passes through as text[]: Storage paths for new uploads
+//   (see storage.ts convention), legacy data-URLs / http URLs untouched.
 // - points are interest_points rows grouped by application_id.
 // - Every write stamps user_id from the active session (RLS requires it).
 
@@ -297,7 +299,15 @@ export async function updateApplication(id: string, data: ApplicationInput): Pro
 
 export async function duplicateApplication(source: Application): Promise<Application> {
   // Points carry an empty id so syncPoints inserts fresh rows with new uuids.
-  return createApplication({
+  // Evidence: legacy entries (data-URL / http) copy by value; stored files
+  // are COPIED (download + re-upload) into the new application's folder so
+  // the duplicate owns its objects and deleting one side never breaks the
+  // other. A failed copy falls back to the shared source path so no image
+  // is silently lost.
+  const userId = await requireUserId();
+  const legacy = (source.images ?? []).filter((v) => !isStorageEvidencePath(v));
+  const stored = (source.images ?? []).filter(isStorageEvidencePath);
+  const created = await createApplication({
     searchId: source.searchId,
     company: `${source.company} (copia)`,
     position: source.position,
@@ -309,8 +319,19 @@ export async function duplicateApplication(source: Application): Promise<Applica
     notes: source.notes,
     points: source.points.map((p) => ({ id: "", title: p.title, content: p.content })),
     cv: source.cv,
-    images: [...source.images],
+    images: [...legacy],
   });
+  if (stored.length === 0) return created;
+  const copied: string[] = [];
+  for (const path of stored) {
+    try {
+      copied.push(await copyEvidenceToApplication(userId, path, created.id));
+    } catch (err) {
+      console.error("[storage] copyEvidenceToApplication failed, sharing source path", err);
+      copied.push(path);
+    }
+  }
+  return patchApplication(created.id, { images: [...legacy, ...copied] });
 }
 
 export async function moveApplication(id: string, searchId: string): Promise<Application> {

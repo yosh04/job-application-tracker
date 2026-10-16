@@ -10,6 +10,7 @@ import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
 import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 import * as db from "./lib/db";
+import { deleteCv, deleteEvidence, isStorageEvidencePath, uploadEvidence } from "./lib/storage";
 import { importSeeds } from "./lib/seedMigrate";
 import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
@@ -259,6 +260,21 @@ export default function App() {
     if (isSupabaseConfigured && supabase && user) {
       try {
         await db.deleteSearch(id);
+        // Cascade deletes the rows; clean their storage objects best-effort.
+        const evidence = apps
+          .filter((a) => a.searchId === id)
+          .flatMap((a) => a.images ?? [])
+          .filter(isStorageEvidencePath);
+        if (evidence.length > 0) {
+          deleteEvidence(evidence).catch((err) => console.error("[storage] deleteEvidence failed", err));
+        }
+        const cvs = apps
+          .filter((a) => a.searchId === id)
+          .map((a) => a.cv?.path)
+          .filter((p): p is string => !!p);
+        if (cvs.length > 0) {
+          deleteCv(cvs).catch((err) => console.error("[storage] deleteCv failed", err));
+        }
       } catch (err) {
         console.error("[db] deleteSearch failed", err);
         notify("No se pudo eliminar la búsqueda");
@@ -272,11 +288,24 @@ export default function App() {
     notify(`Búsqueda "${name}" eliminada`);
   };
 
-  // TODO(supabase): migrate images to Supabase Storage bucket, persist public URLs instead of data-URLs.
+  // Evidence storage cleanup: images[] entries that are Storage paths
+  // (see storage.ts) removed from the row should not orphan their objects.
+  // Best-effort only: failures log and never block the UI update.
+  const cleanupRemovedEvidence = (prevImages: string[] | undefined, nextImages: string[]) => {
+    if (!isSupabaseConfigured || !supabase || !user) return;
+    const next = new Set(nextImages);
+    const removed = (prevImages ?? []).filter((v) => isStorageEvidencePath(v) && !next.has(v));
+    if (removed.length > 0) {
+      deleteEvidence(removed).catch((err) => console.error("[storage] deleteEvidence failed", err));
+    }
+  };
+
   // Optimistic update keeps the UI snappy; reconcile with the DB row when persisted.
   const patchApp = (id: string, patch: Partial<Application>) => {
+    const prev = apps.find((a) => a.id === id);
     setApps((list) => list.map((a) => (a.id === id ? { ...a, ...patch, updatedAt: todayISO() } : a)));
     if (isSupabaseConfigured && supabase && user) {
+      if (patch.images !== undefined) cleanupRemovedEvidence(prev?.images, patch.images);
       db.patchApplication(id, patch)
         .then((saved) => setApps((list) => list.map((a) => (a.id === id ? saved : a))))
         .catch((err) => {
@@ -286,19 +315,47 @@ export default function App() {
     }
   };
 
-  const saveApplication = async (data: Omit<Application, "id" | "createdAt" | "updatedAt">) => {
-    // TODO(supabase): upload data-URL images to Supabase Storage bucket on save, store returned URLs.
+  type ApplicationSave = Omit<Application, "id" | "createdAt" | "updatedAt"> & { newImageFiles?: File[] };
+
+  // Uploads staged evidence files into the application folder and returns
+  // the storage paths. Per-file failures notify inline and skip that file.
+  const uploadStagedEvidence = async (userId: string, appId: string, files: File[]): Promise<string[]> => {
+    const paths: string[] = [];
+    for (const file of files) {
+      try {
+        paths.push(await uploadEvidence(userId, appId, file));
+      } catch (err) {
+        console.error("[storage] uploadEvidence failed", err);
+        notify(err instanceof Error ? err.message : "No se pudo subir una imagen");
+      }
+    }
+    return paths;
+  };
+
+  const saveApplication = async (data: ApplicationSave) => {
+    const { newImageFiles, ...rest } = data;
     const persisted = isSupabaseConfigured && !!supabase && !!user;
     if (modal.type === "application" && modal.editing) {
       const id = modal.editing.id;
+      const prevImages = modal.editing.images ?? [];
       if (!persisted) {
-        setApps((list) => list.map((a) => (a.id === id ? { ...a, ...data, updatedAt: todayISO() } : a)));
+        setApps((list) => list.map((a) => (a.id === id ? { ...a, ...rest, updatedAt: todayISO() } : a)));
         closeModal();
         notify("Postulación actualizada");
         return;
       }
       try {
-        const saved = await db.updateApplication(id, data);
+        // Defensive: the modal uploads on select when editing, but staged
+        // files are still honored here so none are silently dropped.
+        let images = [...(rest.images ?? [])];
+        if (newImageFiles?.length && supabase) {
+          const { data: session } = await supabase.auth.getUser();
+          const userId = session.user?.id;
+          if (!userId) throw new Error("No active session.");
+          images = [...images, ...(await uploadStagedEvidence(userId, id, newImageFiles))];
+        }
+        const saved = await db.updateApplication(id, { ...rest, images });
+        cleanupRemovedEvidence(prevImages, images);
         setApps((list) => list.map((a) => (a.id === id ? saved : a)));
         closeModal();
         notify("Postulación actualizada");
@@ -310,7 +367,7 @@ export default function App() {
     }
     if (!persisted) {
       const app: Application = {
-        ...data,
+        ...rest,
         id: uid("a"),
         createdAt: todayISO(),
         updatedAt: todayISO(),
@@ -323,12 +380,26 @@ export default function App() {
       return;
     }
     try {
-      const app = await db.createApplication(data);
-      setApps((list) => [app, ...list]);
-      setExpanded((e) => ({ ...e, [app.searchId]: true }));
+      // The row must exist first: Storage paths embed the applicationId.
+      const app = await db.createApplication({ ...rest, images: rest.images ?? [] });
+      let finalApp = app;
+      if (newImageFiles?.length && supabase) {
+        const { data: session } = await supabase.auth.getUser();
+        const userId = session.user?.id;
+        if (!userId) throw new Error("No active session.");
+        const paths = await uploadStagedEvidence(userId, app.id, newImageFiles);
+        if (paths.length > 0) {
+          finalApp = await db.patchApplication(app.id, { images: [...app.images, ...paths] });
+        }
+        if (paths.length < newImageFiles.length) {
+          notify(`Postulación creada, pero ${newImageFiles.length - paths.length} imagen(es) no se pudieron subir`);
+        }
+      }
+      setApps((list) => [finalApp, ...list]);
+      setExpanded((e) => ({ ...e, [finalApp.searchId]: true }));
       closeModal();
-      setView({ type: "application", id: app.id });
-      notify(`Postulación de ${app.company} creada`);
+      setView({ type: "application", id: finalApp.id });
+      notify(`Postulación de ${finalApp.company} creada`);
     } catch (err) {
       console.error("[db] createApplication failed", err);
       notify("No se pudo crear la postulación");
@@ -392,6 +463,8 @@ export default function App() {
       }
 
       if (persisted) {
+        // Storage paths embed the applicationId (not the searchId), so moving
+        // across searches keeps every evidence/CV object valid — no file work.
         await db.moveApplication(appId, finalTarget);
       }
       setApps((list) =>
@@ -412,6 +485,14 @@ export default function App() {
     if (isSupabaseConfigured && supabase && user) {
       try {
         await db.deleteApplication(id);
+        // Best-effort storage cleanup so deleting the row orphans no objects.
+        const evidence = (app?.images ?? []).filter(isStorageEvidencePath);
+        if (evidence.length > 0) {
+          deleteEvidence(evidence).catch((err) => console.error("[storage] deleteEvidence failed", err));
+        }
+        if (app?.cv?.path) {
+          deleteCv([app.cv.path]).catch((err) => console.error("[storage] deleteCv failed", err));
+        }
       } catch (err) {
         console.error("[db] deleteApplication failed", err);
         notify("No se pudo eliminar la postulación");
@@ -717,7 +798,12 @@ export default function App() {
                 }}
                 onOpenCvModal={() => setModal({ type: "cv", appId: currentApp.id })}
                 onRemoveCv={() => {
+                  const path = currentApp.cv?.path;
                   patchApp(currentApp.id, { cv: null });
+                  // Best-effort storage cleanup so removing the CV does not orphan the object.
+                  if (isSupabaseConfigured && path) {
+                    deleteCv([path]).catch((err) => console.error("[storage] deleteCv failed", err));
+                  }
                   notify("CV quitado de la postulación");
                 }}
                 onPatch={(patch) => patchApp(currentApp.id, patch)}
