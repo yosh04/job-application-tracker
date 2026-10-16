@@ -17,9 +17,8 @@ export { CV_MAX_BYTES } from "./validation";
 // src; anything else is treated as a storage path and resolved through a
 // short-lived signed URL (see isStorageEvidencePath + getEvidenceUrl).
 //
-// NOTE: the bucket mime allowlist is currently PDF/DOCX only, so image
-// uploads are rejected server-side until image mimes are added via the
-// Dashboard UI. Client code must surface that rejection gracefully.
+// The bucket must allow PDF/DOC/DOCX plus JPEG/PNG/WEBP/GIF MIME types for
+// CV and evidence uploads to succeed.
 
 export const CV_BUCKET = "jobtrack-cvs";
 
@@ -164,8 +163,7 @@ export function isStorageEvidencePath(value: string): boolean {
 function validateEvidenceFile(file: File): void {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   // Extension allowlist is early client-side feedback only; the bucket also
-  // enforces allowed_mime_types server-side. Until image mimes are added via
-  // the Dashboard UI, uploads fail there — callers must handle it gracefully.
+  // enforces allowed_mime_types server-side.
   if (!EVIDENCE_ALLOWED_EXTENSIONS.includes(ext)) {
     throw new Error("Only PNG, JPG, JPEG, WEBP or GIF images are allowed.");
   }

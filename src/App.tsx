@@ -143,7 +143,11 @@ export default function App() {
         notify("Cuenta creada (prototipo)");
         return "confirmed";
       }
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      });
       if (error) throw error;
       if (data.session) {
         closeModal();
@@ -161,7 +165,9 @@ export default function App() {
         notify("Prototipo sin backend: no se envió ningún correo");
         return;
       }
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
       if (error) throw error;
     },
     [notify],

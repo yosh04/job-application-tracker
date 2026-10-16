@@ -3,8 +3,8 @@
 -- How to apply:
 --   Dashboard SQL Editor runs without ownership on storage.buckets, so it
 --   rejects section 1 below with 42501. Create the bucket in the Dashboard
---   Storage UI instead (name jobtrack-cvs, private, 5 MB limit, PDF/DOCX
---   mime allowlist), then run ONLY section 2 in the SQL Editor.
+--   Storage UI instead (name jobtrack-cvs, private, 5 MB limit, PDF/DOC/DOCX
+--   and JPEG/PNG/WEBP/GIF mime allowlist), then run ONLY section 2 in the SQL Editor.
 --   Section 1 is kept for service_role/psql applies. Apply after
 --   0001_jobtrack_schema.sql (see supabase/README.md).
 -- Re-running is safe (ON CONFLICT / DROP ... IF EXISTS guards).
@@ -15,11 +15,11 @@
 --   - The bucket is private (public = false): the app reads files through
 --     short-lived signed URLs (see src/lib/storage.ts getCvUrl), never
 --     through public URLs.
---   - 5 MB size limit and PDF/DOCX mime allowlist are enforced here in SQL
+--   - 5 MB size limit and CV/image mime allowlist are enforced here in SQL
 --     and mirrored client-side (see src/lib/storage.ts) for early feedback.
 
 -- ---------------------------------------------------------------------------
--- 1) Private bucket for CV uploads (5 MB max, PDF/DOCX only) — REFERENCE ONLY
+-- 1) Private bucket for CVs and evidence images (5 MB max) — REFERENCE ONLY
 -- ---------------------------------------------------------------------------
 -- Dashboard note: the SQL Editor role is not owner of storage.buckets and
 -- fails this INSERT with 42501. Create the bucket via Dashboard Storage UI
@@ -34,7 +34,11 @@ VALUES (
   ARRAY[
     'application/pdf',
     'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif'
   ]
 )
 ON CONFLICT (id) DO UPDATE SET

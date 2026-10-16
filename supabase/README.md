@@ -39,7 +39,7 @@ In the same SQL Editor, run:
 select table_name
 from information_schema.tables
 where table_schema = 'public'
-  and table_name in ('searches', 'applications', 'interest_points');
+  and table_name in ('searches', 'applications', 'interest_points', 'application_activity');
 
 select policyname, cmd, roles
 from pg_policies
@@ -47,9 +47,9 @@ where schemaname = 'public'
 order by tablename, cmd;
 ```
 
-Expected: three tables listed, and 12 policies (select/insert/update/delete
-× three tables), all scoped to the `authenticated` role with
-`user_id = auth.uid()`.
+Expected: four tables listed, and 14 policies: select/insert/update/delete
+× the three workspace tables, plus select/insert on `application_activity`.
+All are scoped to the `authenticated` role and the signed-in user.
 
 ## Notes
 
@@ -69,7 +69,9 @@ Expected: three tables listed, and 12 policies (select/insert/update/delete
    cannot write `storage.buckets` and fails with `42501`): **New bucket**,
    name `jobtrack-cvs`, **Private** ON, file size limit `5242880` (5 MB),
    allowed MIME types `application/pdf`, `application/msword`,
-   `application/vnd.openxmlformats-officedocument.wordprocessingml.document`.
+   `application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
+   `image/jpeg`, `image/png`, `image/webp`, and `image/gif`. If the bucket
+   already exists, edit its **Allowed MIME types** to include all seven.
 3. Open **SQL Editor** → **New query**, paste ONLY section 2 of
    `migrations/0002_jobtrack_storage.sql` (from `-- 2) Storage policies`
    to the end of the file), and press **Run**.
@@ -110,13 +112,42 @@ navigation and focus trapping, and the create/duplicate/edit/move/delete flow.
 
 - The bucket is **private**: the app reads CVs through short-lived signed
   URLs (1h, see `src/lib/storage.ts`), never public URLs.
-- 5 MB size limit and the PDF/DOCX allowlist are enforced in SQL and
+- 5 MB size limit and the CV/image allowlist are enforced by the bucket and
   mirrored client-side for early feedback.
 
 ## Migration 0003 — application activity history
 
-If `0001_jobtrack_schema.sql` has already been applied, run
-`migrations/0003_application_activity.sql` in the Supabase SQL Editor. It adds
+Run `migrations/0003_application_activity.sql` after `0001_jobtrack_schema.sql`
+in the Supabase SQL Editor. It adds
 the `application_activity` table with row-level security for reading and
 inserting only the signed-in user's own events. Existing applications remain
 intact; their future changes are recorded in the new timeline.
+
+## Netlify deployment
+
+The repository's `netlify.toml` sets the build command (`npm run build`),
+publish directory (`dist`), Node 22, and SPA fallback routing. Production
+builds fail if either Supabase variable is missing. Before the first deploy:
+
+1. Apply migrations `0001_jobtrack_schema.sql` and
+   `0003_application_activity.sql`, configure the private Storage bucket and
+   its policies as described above, then verify the tables and policies.
+2. In Netlify, configure `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` for the production deploy context. Configure them
+   for preview contexts too if you want previews to use Supabase.
+3. In Supabase **Authentication → URL Configuration**, set the Netlify site
+   URL as the Site URL and add the site URL (and any custom domain) to the
+   allowed redirect URLs. If you use deploy previews, add the Netlify preview
+   pattern `https://**--<site-name>.netlify.app/**` too. Email confirmation
+   and password recovery now redirect to the current app origin, so add the
+   exact local development origin as well (for example
+   `http://localhost:5173/**` or `http://127.0.0.1:5175/**`, matching the URL
+   you actually use).
+4. If you enable Google OAuth, register the Supabase callback URL shown in
+   the Supabase Google provider settings with Google; the Netlify site URL is
+   the allowed post-login redirect, not Google's OAuth callback URL.
+5. Deploy, then verify sign-up/sign-in/sign-out, data isolation with separate
+   users, CV upload/download, evidence image upload, and application activity.
+
+The Supabase anon/publishable key is intended for browser use; keep service
+role keys and other secrets out of `VITE_*` variables and client code.

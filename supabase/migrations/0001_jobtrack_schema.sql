@@ -11,7 +11,7 @@
 --   - Dates from the app model (YYYY-MM-DD strings) map to DATE columns
 --     (applied_at, deadline); timestamps map to timestamptz (created_at, updated_at).
 --   - cv maps to jsonb: {"name": text, "size": text, "updatedAt": text} | null.
---   - images maps to text[] (Supabase Storage URLs in the future; data-URLs today).
+--   - images maps to text[] of private Supabase Storage object paths.
 
 -- 1) UUID generation helper.
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -69,7 +69,7 @@ COMMENT ON COLUMN public.applications.status IS 'Must be one of the 9 exact STAT
 COMMENT ON COLUMN public.applications.applied_at IS 'App model appliedAt (YYYY-MM-DD) stored as DATE.';
 COMMENT ON COLUMN public.applications.deadline IS 'Optional app model deadline (YYYY-MM-DD) stored as DATE.';
 COMMENT ON COLUMN public.applications.cv IS 'Optional {name, size, updatedAt} object; null when no CV attached.';
-COMMENT ON COLUMN public.applications.images IS 'Evidence image URLs (future: Supabase Storage public URLs).';
+COMMENT ON COLUMN public.applications.images IS 'Evidence image object paths in the private jobtrack-cvs Storage bucket.';
 
 -- Indexes for the two most common access patterns: listing one search and
 -- filtering by status.
