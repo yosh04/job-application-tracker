@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../utils/cn";
 import {
   Button,
@@ -14,7 +14,7 @@ import {
   StatusBadge,
   StatusDot,
 } from "./ui";
-import { longDate, shortDate, STATUSES, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
+import { longDate, shortDate, STATUSES, MAX_EVIDENCE_IMAGES, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
 import { ConfirmModal } from "./Modals";
 import { toDisplayUrl, useEvidenceUrls } from "../lib/useEvidenceUrls";
 
@@ -107,6 +107,9 @@ export function ApplicationView({
   onSaveNotes,
   onOpenCvModal,
   onRemoveCv,
+  onExportArchive,
+  exportingArchive,
+  onAddEvidenceFiles,
   onPatch,
 }: {
   app: Application;
@@ -123,6 +126,9 @@ export function ApplicationView({
   onSaveNotes: (notes: string) => void;
   onOpenCvModal: () => void;
   onRemoveCv: () => void;
+  onExportArchive: () => void;
+  exportingArchive: boolean;
+  onAddEvidenceFiles: (files: File[]) => Promise<void>;
   onPatch: (patch: Partial<Application>) => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -131,10 +137,36 @@ export function ApplicationView({
   const [notesDirty, setNotesDirty] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<number | null>(null);
+  const [draggingEvidence, setDraggingEvidence] = useState(false);
+  const [addingEvidence, setAddingEvidence] = useState(false);
+  const evidenceInputRef = useRef<HTMLInputElement>(null);
   const images = app.images ?? [];
+  const activity = app.activity?.length
+    ? [...app.activity].reverse()
+    : [
+        { id: `${app.id}-updated`, label: "Última actualización", createdAt: `${app.updatedAt}T12:00:00.000Z` },
+        { id: `${app.id}-status`, label: `Estado actual · ${app.status}`, createdAt: `${app.appliedAt}T12:00:00.000Z` },
+        { id: `${app.id}-created`, label: "Postulación creada", createdAt: `${app.createdAt}T12:00:00.000Z` },
+      ];
   // Stored evidence resolves to short-lived signed URLs; legacy entries pass through.
   const { urls: evidenceUrls, loading: evidenceLoading } = useEvidenceUrls(images);
   const previewUrl = preview !== null ? toDisplayUrl(preview, evidenceUrls) : null;
+  const evidenceLimitReached = images.length >= MAX_EVIDENCE_IMAGES;
+
+  const addEvidenceFiles = async (files: File[]) => {
+    if (!files.length || addingEvidence || evidenceLimitReached) return;
+    setAddingEvidence(true);
+    try {
+      await onAddEvidenceFiles(files);
+    } finally {
+      setAddingEvidence(false);
+    }
+  };
+
+  useEffect(() => {
+    if (notesDirty) return;
+    setNotes(app.notes);
+  }, [app.notes, notesDirty]);
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-5 py-7 sm:px-8 sm:py-9">
@@ -184,11 +216,15 @@ export function ApplicationView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onExportArchive} disabled={exportingArchive}>
+            <Icon name="download" />
+            {exportingArchive ? "Preparando ZIP…" : "Descargar expediente"}
+          </Button>
           <Dropdown
             width="w-44"
             align="left"
             trigger={(open) => (
-              <button className="inline-flex items-center gap-1.5">
+              <button type="button" aria-label="Cambiar estado" className="inline-flex items-center gap-1.5">
                 <StatusBadge status={app.status} />
                 <Icon name="caret" className={cn("h-3.5 w-3.5 text-faint transition-transform", open && "rotate-180")} />
               </button>
@@ -196,10 +232,12 @@ export function ApplicationView({
           >
             {(close) => (
               <>
-                <p className="px-2.5 pt-1 pb-1.5 text-[10.5px] tracking-[0.14em] text-faint uppercase">Cambiar estado</p>
+                <div role="presentation" className="px-2.5 pt-1 pb-1.5 text-[10.5px] tracking-[0.14em] text-faint uppercase">Cambiar estado</div>
                 {STATUSES.map((s) => (
                   <button
                     key={s}
+                    type="button"
+                    role="menuitem"
                     onClick={() => {
                       onStatusChange(s);
                       close();
@@ -462,9 +500,8 @@ export function ApplicationView({
                 <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg border border-line2 bg-elev text-muted transition-colors group-hover:text-brand-soft">
                   <Icon name="upload" className="h-5 w-5" />
                 </div>
-                <p className="text-[13px] font-medium text-ink">Arrastra tu CV aquí</p>
-                <p className="mt-0.5 text-[12px] text-faint">o haz clic para seleccionarlo</p>
-                <p className="mt-2.5 font-mono text-[10.5px] text-faint">PDF · DOCX · máx 5 MB</p>
+                <p className="text-[13px] font-medium text-ink">Adjunta un CV</p>
+                <p className="mt-0.5 text-[12px] text-faint">Selecciona PDF, DOC o DOCX · máx 5 MB</p>
               </button>
             )}
           </section>
@@ -475,6 +512,7 @@ export function ApplicationView({
               <p className="mb-2 text-[11.5px] text-faint">Cargando imágenes…</p>
             )}
             {images.length > 0 ? (
+              <>
               <div className="grid grid-cols-2 gap-2">
                 {images.map((src, i) => {
                   const display = toDisplayUrl(src, evidenceUrls);
@@ -504,12 +542,77 @@ export function ApplicationView({
                   );
                 })}
               </div>
+              {!evidenceLimitReached && (
+                <button
+                  type="button"
+                  onClick={() => evidenceInputRef.current?.click()}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDraggingEvidence(true);
+                  }}
+                  onDragLeave={() => setDraggingEvidence(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDraggingEvidence(false);
+                    void addEvidenceFiles(Array.from(event.dataTransfer.files));
+                  }}
+                  disabled={addingEvidence}
+                  className={cn(
+                    "mt-2 flex min-h-16 w-full flex-col items-center justify-center rounded-lg border border-dashed px-3 py-3 text-center transition-colors",
+                    draggingEvidence
+                      ? "border-brand bg-brand/10 text-brand-soft"
+                      : "border-line2 text-faint hover:border-brand/45 hover:bg-brand/5 hover:text-muted",
+                  )}
+                >
+                  <span className="text-[12px] font-medium">
+                    {addingEvidence ? "Agregando imágenes…" : "Agregar imágenes"}
+                  </span>
+                  {!addingEvidence && <span className="mt-0.5 text-[11px]">Haz clic o arrastra hasta {MAX_EVIDENCE_IMAGES - images.length} más</span>}
+                </button>
+              )}
+              </>
             ) : (
-              <div className="rounded-xl border border-dashed border-line2 bg-surface/40 px-4 py-6 text-center">
-                <p className="text-[12.5px] text-muted">Sin capturas todavía.</p>
-                <p className="mt-1 text-[11.5px] text-faint">Edita la postulación para adjuntar capturas de la oferta.</p>
-              </div>
+              <button
+                type="button"
+                onClick={() => evidenceInputRef.current?.click()}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDraggingEvidence(true);
+                }}
+                onDragLeave={() => setDraggingEvidence(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDraggingEvidence(false);
+                  void addEvidenceFiles(Array.from(event.dataTransfer.files));
+                }}
+                disabled={addingEvidence}
+                className={cn(
+                  "flex min-h-36 w-full flex-col items-center justify-center rounded-xl border border-dashed bg-surface/40 px-4 py-6 text-center transition-colors",
+                  draggingEvidence
+                    ? "border-brand bg-brand/10 text-brand-soft"
+                    : "border-line2 hover:border-brand/45 hover:bg-brand/5",
+                )}
+              >
+                <Icon name={addingEvidence ? "trend" : "upload"} className="mb-3 h-6 w-6 text-brand-soft" />
+                <span className="text-[12.5px] font-medium text-ink">
+                  {addingEvidence ? "Agregando imágenes…" : "Haz clic o arrastra imágenes aquí"}
+                </span>
+                <span className="mt-1 text-[11.5px] text-faint">PNG, JPG, WEBP o GIF · hasta 5 MB por imagen</span>
+              </button>
             )}
+            <input
+              ref={evidenceInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              aria-label="Seleccionar imágenes de evidencia"
+              multiple
+              className="hidden"
+              disabled={addingEvidence || evidenceLimitReached}
+              onChange={(event) => {
+                void addEvidenceFiles(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }}
+            />
             {preview !== null && (
               <div
                 className="anim-fade fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
@@ -552,23 +655,23 @@ export function ApplicationView({
           </section>
 
           <section>
-            <SectionTitle>Actividad</SectionTitle>
+            <SectionTitle>Actividad · {activity.length}</SectionTitle>
             <div className="rounded-xl border border-line bg-panel p-4">
               <ol className="relative space-y-4 border-l border-line pl-4">
-                {[
-                  { label: "Postulación creada", date: app.createdAt },
-                  { label: "Última actualización", date: app.updatedAt },
-                  { label: `Estado actual · ${app.status}`, date: app.appliedAt },
-                ].map((item, i) => (
-                  <li key={i} className="relative">
+                {activity.map((item, i) => (
+                  <li key={item.id} className="relative">
                     <span
                       className={cn(
                         "absolute top-1 -left-[21px] h-2 w-2 rounded-full ring-3 ring-panel",
-                        i === 2 ? "bg-brand" : "bg-line2",
+                        i === 0 ? "bg-brand" : "bg-line2",
                       )}
                     />
                     <p className="text-[12.5px] text-ink">{item.label}</p>
-                    <p className="mt-0.5 font-mono text-[11px] text-faint">{longDate(item.date)}</p>
+                    {item.details && <p className="mt-0.5 text-[11.5px] text-muted">{item.details}</p>}
+                    <p className="mt-0.5 font-mono text-[11px] text-faint">
+                      {longDate(item.createdAt.slice(0, 10))} ·{" "}
+                      {new Date(item.createdAt).toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit" })}
+                    </p>
                   </li>
                 ))}
               </ol>

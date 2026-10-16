@@ -10,12 +10,14 @@ export function GlobalSearch({
   open,
   applications,
   searches,
+  requiresLogin,
   onClose,
   onOpenApplication,
 }: {
   open: boolean;
   applications: Application[];
   searches: Search[];
+  requiresLogin: boolean;
   onClose: () => void;
   onOpenApplication: (id: string) => void;
 }) {
@@ -126,7 +128,11 @@ export function GlobalSearch({
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {results.length === 0 ? (
             <p className="px-4 py-10 text-center text-[13px] text-muted">
-              {applications.length === 0 ? "Aún no hay postulaciones." : "No hay resultados para esos filtros."}
+              {requiresLogin
+                ? "Inicia sesión para buscar tus postulaciones."
+                : applications.length === 0
+                  ? "Aún no hay postulaciones."
+                  : "No hay resultados para esos filtros."}
             </p>
           ) : (
             results.map((application) => (

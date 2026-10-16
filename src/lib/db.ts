@@ -1,8 +1,9 @@
 import { supabase } from "./supabaseClient";
 import { copyEvidenceToApplication, isStorageEvidencePath } from "./storage";
-import type { Application, CVFile, InterestPoint, Search, Status } from "../types";
+import { initialApplicationActivity } from "./applicationActivity";
+import type { Application, ApplicationActivity, CVFile, InterestPoint, Search, Status } from "../types";
 
-// Supabase persistence layer (Fase 2, slice 2: wiring only, UI untouched).
+// Supabase persistence layer for the user's workspace.
 //
 // Mapping notes (see supabase/migrations/0001_jobtrack_schema.sql):
 // - App ids are strings; persisted rows use DB uuid strings (replaces uid()).
@@ -12,6 +13,7 @@ import type { Application, CVFile, InterestPoint, Search, Status } from "../type
 // - images passes through as text[]: Storage paths for new uploads
 //   (see storage.ts convention), legacy data-URLs / http URLs untouched.
 // - points are interest_points rows grouped by application_id.
+// - activity is stored as append-only application_activity rows.
 // - Every write stamps user_id from the active session (RLS requires it).
 
 interface SearchRow {
@@ -41,6 +43,14 @@ interface ApplicationRow {
   updated_at: string;
 }
 
+interface ApplicationActivityRow {
+  id: string;
+  application_id: string;
+  label: string;
+  details: string | null;
+  created_at: string;
+}
+
 interface InterestPointRow {
   id: string;
   user_id: string;
@@ -57,7 +67,9 @@ export interface Workspace {
 }
 
 export type SearchInput = { name: string; description: string };
-export type ApplicationInput = Omit<Application, "id" | "createdAt" | "updatedAt">;
+export type ApplicationInput = Omit<Application, "id" | "createdAt" | "updatedAt"> & {
+  activity?: ApplicationActivity[];
+};
 
 function getClient() {
   if (!supabase) throw new Error("Supabase is not configured.");
@@ -74,13 +86,33 @@ async function requireUserId(): Promise<string> {
   return id;
 }
 
+async function insertActivityEntries(
+  applicationId: string,
+  userId: string,
+  entries: ApplicationActivity[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  const client = getClient();
+  const { error } = await client.from("application_activity").insert(
+    entries.map((entry) => ({
+      id: entry.id,
+      user_id: userId,
+      application_id: applicationId,
+      label: entry.label,
+      details: entry.details ?? null,
+      created_at: entry.createdAt,
+    })),
+  );
+  if (error) throw error;
+}
+
 /** DATE arrives as "YYYY-MM-DD"; timestamptz as full ISO — slice keeps YYYY-MM-DD. */
 function toDay(value: string): string {
   return value.slice(0, 10);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Local prototype ids (uid("p_...")) are not DB uuids and must be inserted, not updated. */
+/** Locally generated point ids are not DB uuids and must be inserted, not updated. */
 function isUuid(id: string): boolean {
   return UUID_RE.test(id);
 }
@@ -98,7 +130,20 @@ function mapPoint(row: InterestPointRow): InterestPoint {
   return { id: row.id, title: row.title ?? "", content: row.content ?? "" };
 }
 
-function mapApplication(row: ApplicationRow, points: InterestPoint[]): Application {
+function mapActivity(row: ApplicationActivityRow): ApplicationActivity {
+  return {
+    id: row.id,
+    label: row.label,
+    ...(row.details ? { details: row.details } : {}),
+    createdAt: row.created_at,
+  };
+}
+
+function mapApplication(
+  row: ApplicationRow,
+  points: InterestPoint[],
+  activity: ApplicationActivity[],
+): Application {
   return {
     id: row.id,
     searchId: row.search_id,
@@ -113,6 +158,7 @@ function mapApplication(row: ApplicationRow, points: InterestPoint[]): Applicati
     points,
     cv: row.cv ?? null,
     images: row.images ?? [],
+    activity,
     createdAt: toDay(row.created_at),
     updatedAt: toDay(row.updated_at),
   };
@@ -144,24 +190,33 @@ export async function loadWorkspace(): Promise<Workspace> {
     { data: searchRows, error: searchError },
     { data: appRows, error: appError },
     { data: pointRows, error: pointError },
+    { data: activityRows, error: activityError },
   ] = await Promise.all([
     client.from("searches").select("*").order("created_at", { ascending: true }),
     client.from("applications").select("*").order("created_at", { ascending: true }),
     client.from("interest_points").select("*").order("created_at", { ascending: true }),
+    client.from("application_activity").select("*").order("created_at", { ascending: true }).order("id", { ascending: true }),
   ]);
   if (searchError) throw searchError;
   if (appError) throw appError;
   if (pointError) throw pointError;
+  if (activityError) throw activityError;
   const pointsByApp = new Map<string, InterestPoint[]>();
   for (const row of ((pointRows ?? []) as InterestPointRow[])) {
     const list = pointsByApp.get(row.application_id) ?? [];
     list.push(mapPoint(row));
     pointsByApp.set(row.application_id, list);
   }
+  const activityByApp = new Map<string, ApplicationActivity[]>();
+  for (const row of ((activityRows ?? []) as ApplicationActivityRow[])) {
+    const list = activityByApp.get(row.application_id) ?? [];
+    list.push(mapActivity(row));
+    activityByApp.set(row.application_id, list);
+  }
   return {
     searches: ((searchRows ?? []) as SearchRow[]).map(mapSearch),
     applications: ((appRows ?? []) as ApplicationRow[]).map((row) =>
-      mapApplication(row, pointsByApp.get(row.id) ?? []),
+      mapApplication(row, pointsByApp.get(row.id) ?? [], activityByApp.get(row.id) ?? []),
     ),
   };
 }
@@ -176,7 +231,18 @@ async function fetchApplication(id: string): Promise<Application> {
     .eq("application_id", id)
     .order("created_at", { ascending: true });
   if (pointError) throw pointError;
-  return mapApplication(row as ApplicationRow, ((pointRows ?? []) as InterestPointRow[]).map(mapPoint));
+  const { data: activityRows, error: activityError } = await client
+    .from("application_activity")
+    .select("*")
+    .eq("application_id", id)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (activityError) throw activityError;
+  return mapApplication(
+    row as ApplicationRow,
+    ((pointRows ?? []) as InterestPointRow[]).map(mapPoint),
+    ((activityRows ?? []) as ApplicationActivityRow[]).map(mapActivity),
+  );
 }
 
 /* ---------------------------------------------------------------- searches */
@@ -273,13 +339,21 @@ export async function createApplication(data: ApplicationInput): Promise<Applica
   const userId = await requireUserId();
   const { data: row, error } = await client
     .from("applications")
-    .insert({ ...toApplicationPayload(data), user_id: userId })
+    .insert({
+      ...toApplicationPayload(data),
+      user_id: userId,
+    })
     .select()
     .single();
   if (error) throw error;
   const appRow = row as ApplicationRow;
-  const points = data.points.length > 0 ? await syncPoints(appRow.id, userId, data.points) : [];
-  return mapApplication(appRow, points);
+  if (data.points.length > 0) await syncPoints(appRow.id, userId, data.points);
+  await insertActivityEntries(
+    appRow.id,
+    userId,
+    data.activity?.length ? data.activity : initialApplicationActivity(data.status),
+  );
+  return fetchApplication(appRow.id);
 }
 
 export async function updateApplication(id: string, data: ApplicationInput): Promise<Application> {
@@ -293,8 +367,9 @@ export async function updateApplication(id: string, data: ApplicationInput): Pro
     .single();
   if (error) throw error;
   const appRow = row as ApplicationRow;
-  const points = await syncPoints(appRow.id, userId, data.points);
-  return mapApplication(appRow, points);
+  await syncPoints(appRow.id, userId, data.points);
+  await insertActivityEntries(appRow.id, userId, data.activity ?? []);
+  return fetchApplication(appRow.id);
 }
 
 export async function duplicateApplication(source: Application): Promise<Application> {
@@ -366,6 +441,7 @@ export async function patchApplication(id: string, patch: Partial<Application>):
   if (patch.notes !== undefined) row.notes = patch.notes;
   if (patch.cv !== undefined) row.cv = patch.cv;
   if (patch.images !== undefined) row.images = patch.images;
+  if (patch.activity !== undefined) row.activity = patch.activity;
   if (Object.keys(row).length > 0) {
     const { error } = await client.from("applications").update(row).eq("id", id);
     if (error) throw error;
@@ -373,6 +449,7 @@ export async function patchApplication(id: string, patch: Partial<Application>):
   if (patch.points !== undefined) {
     await syncPoints(id, userId, patch.points);
   }
+  if (patch.activity !== undefined) await insertActivityEntries(id, userId, patch.activity);
   return fetchApplication(id);
 }
 

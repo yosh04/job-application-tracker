@@ -1,7 +1,7 @@
 # Tareas del proyecto — JobTrack (del prototipo a producción)
 
 Hoja de ruta para llevar este prototipo a una aplicación en producción.
-Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage privado (Fases 1–3 en código; pendientes verificaciones físicas: provider Google, mimes de imágenes y smoke tests).
+Estado actual: autenticación, persistencia y Storage (Fases 1–3), filtros/búsqueda y agenda (Fases 4–5), más nombre de paquete y build multi-asset para hosting (Fase 6, puntos 1–2) implementados. Despliegue y verificación física de auth/RLS/Storage siguen pendientes.
 
 ## Fase 0 — Base lista (prototipo actual)
 
@@ -32,7 +32,7 @@ Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage 
 - [x] Diseñar schema en Postgres (Supabase): `searches`, `applications` (FK a `searches` con cascade + `check` de estado), `interest_points` (FK a `applications`)
 - [x] Definir políticas RLS por `user_id` / propietario en las tres tablas
 - [x] Reemplazar `useState` + seed por consultas a Supabase (lectura/escritura por usuario)
-- [x] Reemplazar `uid()` (`Math.random`) por `uuid` generado en base de datos
+- [x] Usar UUID de base de datos para filas persistidas y `crypto.randomUUID()` para IDs locales
 - [x] Migrar datos semilla con fechas ISO (`todayISO()` / `YYYY-MM-DD`) y validar estados y fechas (import explícito con botón, nunca automático)
 
 ## Fase 3 — Almacenamiento de CV
@@ -41,7 +41,7 @@ Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage 
 - [x] Validar en cliente PDF/DOCX de máx. 5 MB + reforzar con policy en el bucket
 - [x] Reemplazar carga simulada por subida real y guardar la URL en `Application.cv`
 - [x] Permitir previsualizar, descargar y eliminar el CV por postulación
-- [x] Migrar imágenes de evidencia de data-URL a Storage (hoy `images: string[]` con `TODO` en `src/types.ts` y `App.tsx`; pendiente agregar mimes de imagen al bucket por UI)
+- [x] Migrar imágenes de evidencia de data-URL a Storage (paths en `images: string[]`; la allowlist del bucket todavía debe incluir los mimes de imagen para habilitar sus cargas)
 
 ## Fase 4 — Filtros y búsqueda
 
@@ -66,24 +66,24 @@ Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage 
 
 ## Fase 6 — Despliegue
 
-- [ ] Renombrar `package.json` (`react-vite-tailwind` es genérico; usar `jobtrack` o similar)
-- [ ] Revisar `vite-plugin-singlefile` activo: evaluar si se mantiene en producción (bundle único vs. caché/CDN)
+- [x] Renombrar `package.json` (`react-vite-tailwind` es genérico; usar `jobtrack` o similar)
+- [x] Revisar `vite-plugin-singlefile`: se retiró para Netlify; los assets JS/CSS separados permiten aprovechar caché y CDN.
 - [ ] Configurar variables de entorno en el hosting (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`)
 - [ ] Desplegar frontend (Vercel, Netlify o similar)
 - [ ] Verificar autenticación, RLS y Storage en producción con usuario real
 
 ## Fase 7 — Pulido
 
-- [ ] Corregir bug de notas sin resync (edición de notas no se refleja hasta recargar/renavegar)
-- [ ] Agregar validaciones: URL de oferta, formato de fechas, tipo/tamaño de CV
-- [ ] Hacer el Dropdown accesible por teclado + focus-trap en modales
-- [ ] Agregar acciones (ver/editar/mover/eliminar) a las cards en mobile
-- [ ] Agregar `vitest` + tests de flujos: crear, duplicar, mover y eliminar postulaciones; filtros
-- [ ] Auditoría responsive y de contraste
-- [ ] Limpieza de código prototipo (`TODO(supabase)`, seed, `uid()`) y documentación final
+- [x] Corregir bug de notas sin resync (la ficha sincroniza notas guardadas y al cambiar de postulación)
+- [x] Agregar validaciones: URL de oferta, formato de fechas, tipo/tamaño de CV
+- [x] Hacer el Dropdown accesible por teclado + focus-trap en modales
+- [x] Agregar acciones (ver/editar/mover/eliminar) a las cards en mobile
+- [x] Agregar `vitest` + tests de flujos: crear, duplicar, mover y eliminar postulaciones; filtros
+- [x] Auditoría responsive y de contraste (ajustado texto tenue para superar WCAG AA en fondos principales)
+- [x] Limpieza de código prototipo (IDs locales con `crypto.randomUUID()`, retirar el CV ficticio del formulario, documentar seeds de fallback e importación explícita)
 
-## Deuda detectada en revisión
+## Pendientes de verificación real
 
-- Sin persistencia: todo vive en `useState` + seed y los IDs usan `Math.random`, por lo que hay colisiones posibles y pérdida de datos al recargar.
-- Sin validaciones ni tests: URLs, fechas y archivos se aceptan sin control; no hay suite de pruebas.
-- Accesibilidad y mobile parciales: Dropdown sin teclado y cards sin acciones en pantallas chicas.
+- Desplegar en Netlify y configurar las variables `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.
+- Verificar login, RLS y Storage con usuario real en producción.
+- Agregar mimes de imágenes a la allowlist del bucket privado para habilitar la carga de evidencia.

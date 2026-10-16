@@ -4,8 +4,10 @@ import { Button, Icon, Input, Label, Modal, Select, Textarea } from "./ui";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { deleteCv, downloadCv, formatFileSize, getCvUrl, uploadCv } from "../lib/storage";
 import { isStorageEvidencePath, uploadEvidence } from "../lib/storage";
+import { isValidISODate, isValidOfferUrl, validateCvFile } from "../lib/validation";
+import { prefixCvFilename } from "../lib/fileNames";
 import { toDisplayUrl, useEvidenceUrls } from "../lib/useEvidenceUrls";
-import { STATUSES, MAX_EVIDENCE_IMAGES, longDate, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
+import { STATUSES, MAX_EVIDENCE_IMAGES, longDate, todayISO, uid, type Application, type InterestPoint, type Search, type Status } from "../types";
 
 /* --------------------------------------------------------- search modal */
 
@@ -130,7 +132,7 @@ export function ApplicationModal({
   });
   const [points, setPoints] = useState<InterestPoint[]>([]);
   const [pt, setPt] = useState({ title: "", content: "" });
-  const [cv, setCv] = useState<Application["cv"]>(null);
+  const cv = editing?.cv ?? null;
   const [images, setImages] = useState<string[]>([]);
   // Files picked for a new (unsaved) application: no applicationId exists yet,
   // so they preview via object URLs and upload in App.saveApplication post-create.
@@ -162,7 +164,6 @@ export function ApplicationModal({
       notes: editing?.notes ?? "",
     });
     setPoints(editing?.points ? editing.points.map((p) => ({ ...p })) : []);
-    setCv(editing?.cv ?? null);
     setImages(editing?.images ? [...editing.images].slice(0, MAX_EVIDENCE_IMAGES) : []);
     setPending((prev) => {
       revokePending(prev);
@@ -173,7 +174,22 @@ export function ApplicationModal({
     setImgUploading(false);
   }, [open, editing, defaultSearchId, searches]);
 
-  const valid = form.company.trim() && form.position.trim();
+  const urlError = !isValidOfferUrl(form.url) ? "Ingresa una URL válida que comience con http:// o https://." : "";
+  const appliedAtError = !isValidISODate(form.appliedAt) ? "Ingresa una fecha de aplicación válida." : "";
+  const deadlineError = form.deadline
+    ? !isValidISODate(form.deadline)
+      ? "Ingresa una fecha límite válida."
+      : isValidISODate(form.appliedAt) && form.deadline < form.appliedAt
+        ? "La fecha límite no puede ser anterior a la fecha de aplicación."
+        : ""
+    : "";
+  const valid =
+    !!form.company.trim() &&
+    !!form.position.trim() &&
+    !!form.searchId &&
+    isValidISODate(form.appliedAt) &&
+    !urlError &&
+    !deadlineError;
   const totalImages = images.length + pending.length;
   const imagesFull = totalImages >= MAX_EVIDENCE_IMAGES;
 
@@ -219,7 +235,7 @@ export function ApplicationModal({
       setPending((prev) => {
         const room = MAX_EVIDENCE_IMAGES - images.length - prev.length;
         const staged = selected.slice(0, Math.max(room, 0)).map((file, i) => ({
-          id: `pending_${Date.now()}_${i}`,
+          id: `pending_${crypto.randomUUID()}_${i}`,
           file,
           preview: URL.createObjectURL(file),
         }));
@@ -264,6 +280,7 @@ export function ApplicationModal({
       ...form,
       company: form.company.trim(),
       position: form.position.trim(),
+      url: form.url.trim(),
       deadline: form.deadline.trim() ? form.deadline.trim() : undefined,
       points,
       cv,
@@ -325,13 +342,16 @@ export function ApplicationModal({
             </Select>
           </div>
           <div>
-            <Label>URL de la oferta</Label>
+            <Label hint="opcional">URL de la oferta</Label>
             <Input
+              type="url"
               placeholder="https://…"
               value={form.url}
               onChange={(e) => setForm({ ...form, url: e.target.value })}
               className="font-mono text-[12.5px]"
+              aria-invalid={!!urlError}
             />
+            {urlError && <p className="mt-1 text-[11.5px] text-red-300" role="alert">{urlError}</p>}
           </div>
           <div>
             <Label>Estado</Label>
@@ -346,11 +366,24 @@ export function ApplicationModal({
           <div className="grid grid-cols-2 gap-3 sm:col-span-2">
             <div>
               <Label>Fecha</Label>
-              <Input type="date" value={form.appliedAt} onChange={(e) => setForm({ ...form, appliedAt: e.target.value })} />
+              <Input
+                type="date"
+                required
+                value={form.appliedAt}
+                onChange={(e) => setForm({ ...form, appliedAt: e.target.value })}
+                aria-invalid={!!appliedAtError}
+              />
+              {appliedAtError && <p className="mt-1 text-[11.5px] text-red-300" role="alert">{appliedAtError}</p>}
             </div>
             <div>
               <Label hint="opcional">Fecha límite</Label>
-              <Input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
+              <Input
+                type="date"
+                value={form.deadline}
+                onChange={(e) => setForm({ ...form, deadline: e.target.value })}
+                aria-invalid={!!deadlineError}
+              />
+              {deadlineError && <p className="mt-1 text-[11.5px] text-red-300" role="alert">{deadlineError}</p>}
             </div>
           </div>
         </div>
@@ -397,7 +430,7 @@ export function ApplicationModal({
                 className="h-full"
                 disabled={!pt.title.trim()}
                 onClick={() => {
-                  setPoints([...points, { id: `p_${Date.now()}`, title: pt.title.trim(), content: pt.content.trim() }]);
+                  setPoints([...points, { id: uid("p"), title: pt.title.trim(), content: pt.content.trim() }]);
                   setPt({ title: "", content: "" });
                 }}
               >
@@ -415,23 +448,13 @@ export function ApplicationModal({
               <Icon name="file" className="h-4 w-4 text-brand-soft" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[12.5px] text-ink">{cv.name}</p>
-                <p className="font-mono text-[10.5px] text-faint">PDF · {cv.size}</p>
+                <p className="font-mono text-[10.5px] text-faint">{cv.name.split(".").pop()?.toUpperCase()} · {cv.size}</p>
               </div>
-              <button onClick={() => setCv(null)} className="text-faint hover:text-red-300" aria-label="Quitar CV">
-                <Icon name="x" className="h-4 w-4" />
-              </button>
             </div>
           ) : (
-            <button
-              onClick={() =>
-                setCv({ name: `CV - ${form.company.trim() || "Empresa"}.pdf`, size: "236 KB", updatedAt: todayISO() })
-              }
-              className="flex w-full flex-col items-center rounded-md border border-dashed border-line2 px-4 py-5 transition-colors hover:border-brand/45 hover:bg-brand/5"
-            >
-              <Icon name="upload" className="mb-2 h-4 w-4 text-muted" />
-              <p className="text-[12.5px] text-ink">Arrastra tu CV aquí</p>
-              <p className="mt-0.5 font-mono text-[10.5px] text-faint">PDF · DOCX · máx 5 MB</p>
-            </button>
+            <p className="rounded-md border border-dashed border-line2 px-4 py-4 text-center text-[12.5px] text-muted">
+              Guarda la postulación y adjunta el archivo desde la ficha. Se validará el tipo y tamaño del CV.
+            </p>
           )}
         </div>
 
@@ -713,6 +736,7 @@ export function CVModal({
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [draggingCv, setDraggingCv] = useState(false);
 
   // Prototype fallback (no backend): metadata only, no real upload.
   const backend = isSupabaseConfigured && !!supabase;
@@ -729,6 +753,7 @@ export function CVModal({
     setError(null);
     setPreviewUrl(null);
     setPreviewLoading(false);
+    setDraggingCv(false);
   }, [open, app]);
 
   // Resolve a short-lived signed URL for stored CVs (private bucket).
@@ -751,26 +776,50 @@ export function CVModal({
     };
   }, [open, backend, draftPath]);
 
-  const handleFiles = async (files: FileList | null) => {
+  const handleFiles = async (files: File[] | FileList | null) => {
     const file = files?.[0];
     if (!file || uploading) return;
     setError(null);
-    // Prototype fallback: keep metadata only, no real upload.
-    if (!backend || !supabase) {
-      setDraft({ name: file.name, size: formatFileSize(file.size), updatedAt: todayISO() });
+    const validationError = validateCvFile(file);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     if (!app) {
       setError("No application selected.");
       return;
     }
+    const namedFile = new File([file], prefixCvFilename(app.company, file.name), {
+      type: file.type,
+      lastModified: file.lastModified,
+    });
+    // Keep a local copy in prototype mode so the application archive can include the CV.
+    if (!backend || !supabase) {
+      setUploading(true);
+      setUploadName(namedFile.name);
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read CV file."));
+          reader.onerror = () => reject(reader.error ?? new Error("Could not read CV file."));
+          reader.readAsDataURL(namedFile);
+        });
+        setDraft({ name: namedFile.name, size: formatFileSize(file.size), updatedAt: todayISO(), dataUrl });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not read CV file.");
+      } finally {
+        setUploading(false);
+        setUploadName(null);
+      }
+      return;
+    }
     setUploading(true);
-    setUploadName(file.name);
+    setUploadName(namedFile.name);
     try {
       const { data } = await supabase.auth.getUser();
       const userId = data.user?.id;
       if (!userId) throw new Error("No active session.");
-      const uploaded = await uploadCv(userId, app.id, file);
+      const uploaded = await uploadCv(userId, app.id, namedFile);
       setDraft(uploaded);
       setPreviewUrl(null);
     } catch (err) {
@@ -779,6 +828,37 @@ export function CVModal({
       setUploading(false);
       setUploadName(null);
     }
+  };
+
+  const handleCvDragEnter = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!uploading && busy === null) setDraggingCv(true);
+  };
+
+  const handleCvDragOver = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    if (!uploading && busy === null) setDraggingCv(true);
+  };
+
+  const handleCvDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    setDraggingCv(false);
+  };
+
+  const handleCvDrop = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDraggingCv(false);
+    if (uploading || busy !== null) return;
+    const itemFiles = Array.from(event.dataTransfer.items ?? [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    const files = itemFiles.length > 0 ? itemFiles : Array.from(event.dataTransfer.files ?? []);
+    void handleFiles(files);
   };
 
   const handleDownload = async () => {
@@ -832,7 +912,21 @@ export function CVModal({
       }
     >
       {draft && (
-        <div className="mb-4 rounded-lg border border-line bg-panel p-5">
+        <div
+          onDragEnter={handleCvDragEnter}
+          onDragOver={handleCvDragOver}
+          onDragLeave={handleCvDragLeave}
+          onDrop={handleCvDrop}
+          className={cn(
+            "mb-4 rounded-lg border bg-panel p-5 transition-colors",
+            draggingCv ? "border-brand bg-brand/8" : "border-line",
+          )}
+        >
+          {draggingCv && (
+            <p className="mb-3 text-center text-[12px] font-medium text-brand-soft">
+              Suelta el archivo para reemplazar el CV
+            </p>
+          )}
           <div className="flex flex-col items-center text-center">
             <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-lg border border-brand/25 bg-brand/10 text-brand-soft">
               <Icon name="file" className="h-6 w-6" />
@@ -887,14 +981,17 @@ export function CVModal({
 
       {!draft && (
         <label
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            void handleFiles(e.dataTransfer.files);
-          }}
+          onDragEnter={handleCvDragEnter}
+          onDragOver={handleCvDragOver}
+          onDragLeave={handleCvDragLeave}
+          onDrop={handleCvDrop}
           className={cn(
             "flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors",
-            uploading ? "border-brand/60 bg-brand/6" : "border-line2 bg-surface/40 hover:border-brand/45 hover:bg-brand/5",
+            uploading
+              ? "border-brand/60 bg-brand/6"
+              : draggingCv
+                ? "border-brand bg-brand/10"
+                : "border-line2 bg-surface/40 hover:border-brand/45 hover:bg-brand/5",
           )}
         >
           <div
@@ -915,12 +1012,18 @@ export function CVModal({
             </>
           ) : (
             <>
-              <p className="text-[14px] font-medium text-ink">Arrastra tu CV aquí</p>
-              <p className="mt-1 text-[12.5px] text-muted">o</p>
-              <span className="mt-2.5 inline-flex h-8.5 items-center rounded-md bg-brand px-3 text-[13px] font-medium text-white">
-                Seleccionar archivo
-              </span>
-              <p className="mt-3 font-mono text-[10.5px] text-faint">PDF · DOCX · máx 5 MB</p>
+              <p className="text-[14px] font-medium text-ink">
+                {draggingCv ? "Suelta aquí tu archivo de CV" : "Selecciona un archivo de CV"}
+              </p>
+              {!draggingCv && (
+                <>
+                  <p className="mt-1 text-[12.5px] text-muted">o</p>
+                  <span className="mt-2.5 inline-flex h-8.5 items-center rounded-md bg-brand px-3 text-[13px] font-medium text-white">
+                    Seleccionar archivo
+                  </span>
+                </>
+              )}
+              <p className="mt-3 font-mono text-[10.5px] text-faint">PDF · DOC · DOCX · máx 5 MB</p>
             </>
           )}
           <input
@@ -936,7 +1039,7 @@ export function CVModal({
         </label>
       )}
 
-      {error && <p className="mt-3 text-[12px] leading-relaxed text-red-300">{error}</p>}
+      {error && <p className="mt-3 text-[12px] leading-relaxed text-red-300" role="alert">{error}</p>}
 
       <p className="mt-3 text-[11.5px] leading-relaxed text-faint">
         {backend

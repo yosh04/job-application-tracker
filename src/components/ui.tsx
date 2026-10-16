@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { cn } from "../utils/cn";
 import { STATUS_META, type Status } from "../types";
 
@@ -40,6 +40,7 @@ const PATHS: Record<string, React.ReactNode> = {
     </>
   ),
   upload: <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 17v1.5A2.5 2.5 0 0 0 6.5 21h11A2.5 2.5 0 0 0 20 18.5V17" />,
+  download: <path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />,
   eye: (
     <>
       <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
@@ -155,6 +156,8 @@ export function IconButton({
 
 /* ------------------------------------------------------------------ modal */
 
+const activeDialogs: HTMLElement[] = [];
+
 export function Modal({
   open,
   onClose,
@@ -172,14 +175,57 @@ export function Modal({
   footer?: React.ReactNode;
   width?: string;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
+    const dialog = dialogRef.current;
+    if (!open || !dialog) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    activeDialogs.push(dialog);
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const focusable = dialog.querySelector<HTMLElement>("[autofocus]") ?? dialog.querySelector<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    (focusable ?? dialog).focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (activeDialogs[activeDialogs.length - 1] !== dialog) return;
+      if (event.key === "Escape") {
+        if (dialog.querySelector('[role="menu"]')) return;
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.getAttribute("type") !== "hidden");
+      if (elements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
+      const index = activeDialogs.lastIndexOf(dialog);
+      if (index >= 0) activeDialogs.splice(index, 1);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [open, onClose]);
 
@@ -189,16 +235,19 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <div className="anim-fade absolute inset-0 bg-black/72 backdrop-blur-[3px]" onClick={onClose} />
       <div
+        ref={dialogRef}
         className={cn(
           "anim-pop relative z-10 flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl border border-line2 bg-panel shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] sm:rounded-xl",
           width,
         )}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
-            <h2 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
+            <h2 id={titleId} className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
             {subtitle && <p className="mt-0.5 text-[12.5px] text-muted">{subtitle}</p>}
           </div>
           <IconButton label="Cerrar" onClick={onClose} className="-mt-1 -mr-1">
@@ -291,33 +340,92 @@ export function Dropdown({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+
+  const getTrigger = () =>
+    triggerRef.current?.querySelector<HTMLElement>("button, [role='button'], [tabindex='0']");
+
+  useEffect(() => {
+    const triggerElement = getTrigger();
+    triggerElement?.setAttribute("aria-haspopup", "menu");
+    triggerElement?.setAttribute("aria-expanded", String(open));
+    triggerElement?.setAttribute("aria-controls", menuId);
+  }, [open, menuId]);
 
   useEffect(() => {
     if (!open) return;
+    const firstItem = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])');
+    firstItem?.focus();
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
+  const close = () => {
+    setOpen(false);
+    getTrigger()?.focus();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [],
+    );
+    const activeIndex = items.indexOf(document.activeElement as HTMLElement);
+    if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (!open) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const next = activeIndex < 0
+        ? direction > 0 ? 0 : items.length - 1
+        : (activeIndex + direction + items.length) % items.length;
+      items[next]?.focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
+  };
+
   return (
-    <div className="relative" ref={ref}>
-      <div onClick={() => setOpen((o) => !o)}>{trigger(open)}</div>
+    <div
+      className="relative"
+      ref={ref}
+      onKeyDown={handleKeyDown}
+      onBlur={(event) => {
+        if (event.relatedTarget instanceof Node && !ref.current?.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <div ref={triggerRef} onClick={() => setOpen((value) => !value)}>{trigger(open)}</div>
       {open && (
         <div
+          ref={menuRef}
+          id={menuId}
+          role="menu"
           className={cn(
             "anim-slide absolute z-40 mt-1.5 overflow-hidden rounded-lg border border-line2 bg-elev p-1 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.85)]",
             width,
             align === "right" ? "right-0" : "left-0",
           )}
         >
-          {children(() => setOpen(false))}
+          {children(close)}
         </div>
       )}
     </div>
@@ -343,6 +451,7 @@ export function MenuItem({
     <button
       onClick={onClick}
       disabled={disabled}
+      role="menuitem"
       className={cn(
         "flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-2 text-left text-[13px] transition-colors disabled:opacity-40",
         danger ? "text-red-300 hover:bg-red-500/12" : "text-muted hover:bg-white/6 hover:text-ink",

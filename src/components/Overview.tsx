@@ -1,5 +1,5 @@
 import { cn } from "../utils/cn";
-import { Button, Icon, IconButton, StatusBadge } from "./ui";
+import { Button, Icon, StatusBadge } from "./ui";
 import { shortDate, type Application, type Search } from "../types";
 import { sortByDeadline } from "../lib/deadlines";
 import { DeadlineBadge } from "./DeadlineBadge";
@@ -181,9 +181,9 @@ export function Overview({
               </div>
               <StatusBadge status={a.status} className="hidden sm:inline-flex" />
               <span className="hidden font-mono text-[11px] text-faint sm:inline">{shortDate(a.updatedAt)}</span>
-              <IconButton label="Abrir" className="h-7 w-7 opacity-0 group-hover:opacity-100">
+              <span aria-hidden="true" className="inline-flex h-7 w-7 items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
                 <Icon name="chevron" className="h-3.5 w-3.5" />
-              </IconButton>
+              </span>
             </button>
           ))}
         </div>

@@ -24,6 +24,15 @@ export interface CVFile {
   updatedAt: string;
   /** Supabase Storage object path (<uid>/<applicationId>/<file>). Absent on legacy metadata-only entries. */
   path?: string;
+  /** Local prototype-only copy so the CV can be included in an exported archive. */
+  dataUrl?: string;
+}
+
+export interface ApplicationActivity {
+  id: string;
+  label: string;
+  details?: string;
+  createdAt: string;
 }
 
 export interface Application {
@@ -44,6 +53,7 @@ export interface Application {
   images: string[];
   createdAt: string;
   updatedAt: string;
+  activity?: ApplicationActivity[];
 }
 
 /** Max evidence images per application (enforced in modal + view). */
@@ -104,7 +114,7 @@ export function longDate(iso: string): string {
 }
 
 export function uid(prefix = "id"): string {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+  return `${prefix}_${crypto.randomUUID()}`;
 }
 
 /** Fecha de hoy en formato ISO corto (YYYY-MM-DD). */

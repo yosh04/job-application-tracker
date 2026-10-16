@@ -1,5 +1,7 @@
 import { supabase } from "./supabaseClient";
 import { todayISO } from "../types";
+import { validateCvFile as getCvFileValidationError } from "./validation";
+export { CV_MAX_BYTES } from "./validation";
 
 // Supabase Storage helpers (Fase 3: CV in slice 1, evidence images in slice 2).
 //
@@ -20,11 +22,6 @@ import { todayISO } from "../types";
 // Dashboard UI. Client code must surface that rejection gracefully.
 
 export const CV_BUCKET = "jobtrack-cvs";
-
-/** 5 MB max, mirroring the file_size_limit in 0002_jobtrack_storage.sql. */
-export const CV_MAX_BYTES = 5 * 1024 * 1024;
-
-const CV_ALLOWED_EXTENSIONS = ["pdf", "docx", "doc"];
 
 export interface UploadedCv {
   path: string;
@@ -65,15 +62,8 @@ function sanitizeFileName(name: string): string {
 }
 
 function validateCvFile(file: File): void {
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  // Extension allowlist is early client-side feedback only; the bucket also
-  // enforces allowed_mime_types server-side (see 0002_jobtrack_storage.sql).
-  if (!CV_ALLOWED_EXTENSIONS.includes(ext)) {
-    throw new Error("Only PDF, DOCX or DOC files are allowed.");
-  }
-  if (file.size > CV_MAX_BYTES) {
-    throw new Error("File exceeds the 5 MB limit.");
-  }
+  const error = getCvFileValidationError(file);
+  if (error) throw new Error(error);
 }
 
 /**
@@ -113,13 +103,19 @@ export async function getCvUrl(path: string): Promise<string> {
   return data.signedUrl;
 }
 
-/** Downloads a private CV object through a temporary anchor element. */
-export async function downloadCv(path: string, filename: string): Promise<void> {
+/** Downloads a private CV object as a Blob. */
+export async function downloadCvBlob(path: string): Promise<Blob> {
   const client = getClient();
   await requireUserId();
   const { data, error } = await client.storage.from(CV_BUCKET).download(path);
   if (error) throw error;
   if (!data) throw new Error("CV download returned no data.");
+  return data;
+}
+
+/** Downloads a private CV object through a temporary anchor element. */
+export async function downloadCv(path: string, filename: string): Promise<void> {
+  const data = await downloadCvBlob(path);
   const url = URL.createObjectURL(data);
   try {
     const anchor = document.createElement("a");

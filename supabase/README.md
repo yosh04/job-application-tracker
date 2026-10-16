@@ -1,6 +1,6 @@
 # JobTrack Supabase schema
 
-Slice 1 of Fase 2: database schema only. No app wiring yet.
+Schema, migrations and runtime integration for JobTrack's Supabase backend.
 
 ## What this is
 
@@ -8,8 +8,17 @@ Slice 1 of Fase 2: database schema only. No app wiring yet.
   `searches`, `applications`, `interest_points`, plus indexes,
   `updated_at` triggers, and Row Level Security (RLS) policies so each
   authenticated user only sees their own rows.
-- The app still uses local seeds (`src/seed.ts`). App wiring against
-  Supabase comes in the next slice.
+- `migrations/0003_application_activity.sql` adds an append-only activity table.
+  The app records status, detail, notes, CV, evidence, and interest-point
+  changes so later updates cannot replace earlier timeline entries.
+- When `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured,
+  the app uses Supabase Auth and reads/writes the signed-in user's workspace.
+- Without those variables, the app runs in prototype mode using local sample
+  data. Sample data is never uploaded automatically; the signed-in empty
+  workspace offers an explicit import action.
+- CV files and evidence images use the private `jobtrack-cvs` Storage bucket.
+  The bucket's current MIME allowlist must include image types before evidence
+  uploads will succeed.
 
 ## How to apply (Supabase Dashboard SQL Editor)
 
@@ -44,16 +53,14 @@ Expected: three tables listed, and 12 policies (select/insert/update/delete
 
 ## Notes
 
-- No `.env` or app code changes in this slice.
-- Seeds stay local for now; data migration comes later.
-- RLS is defined here but untested against a live project until you
-  apply the SQL in the Dashboard.
+- Keep `.env` files out of version control; use `.env.example` as the template.
+- RLS policies are defined here, but must be verified against the live
+  Supabase project during deployment.
 
 ## Migration 0002 — private CV storage bucket (Fase 3, slice 1)
 
-`migrations/0002_jobtrack_storage.sql` creates the private bucket
-`jobtrack-cvs` (CV uploads only; evidence images stay data-URL until the
-next slice).
+`migrations/0002_jobtrack_storage.sql` defines policies for the private
+`jobtrack-cvs` bucket, which stores CV files and evidence images.
 
 ### How to apply
 
@@ -87,9 +94,29 @@ Expected: one bucket row (`public = false`), and four policies
 (insert/select/update/delete) scoped to the `authenticated` role with
 `(storage.foldername(name))[1] = auth.uid()::text`.
 
+## Frontend verification
+
+From the repository root, run:
+
+```sh
+npm test
+npm run build
+```
+
+The tests cover URL/date/CV validation, combined dashboard filters, keyboard
+navigation and focus trapping, and the create/duplicate/edit/move/delete flow.
+
 ### Notes
 
 - The bucket is **private**: the app reads CVs through short-lived signed
   URLs (1h, see `src/lib/storage.ts`), never public URLs.
 - 5 MB size limit and the PDF/DOCX allowlist are enforced in SQL and
   mirrored client-side for early feedback.
+
+## Migration 0003 — application activity history
+
+If `0001_jobtrack_schema.sql` has already been applied, run
+`migrations/0003_application_activity.sql` in the Supabase SQL Editor. It adds
+the `application_activity` table with row-level security for reading and
+inserting only the signed-in user's own events. Existing applications remain
+intact; their future changes are recorded in the new timeline.

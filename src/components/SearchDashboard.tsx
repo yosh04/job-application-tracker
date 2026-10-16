@@ -36,6 +36,7 @@ export function SearchDashboard({
   onNewApplication,
   onRenameSearch,
   onDeleteSearch,
+  onEdit,
   onStatusChange,
   onDuplicate,
   onMove,
@@ -48,6 +49,7 @@ export function SearchDashboard({
   onNewApplication: () => void;
   onRenameSearch: () => void;
   onDeleteSearch: () => void;
+  onEdit: (id: string) => void;
   onStatusChange: (id: string, status: Status) => void;
   onDuplicate: (id: string) => void;
   onMove: (id: string) => void;
@@ -238,7 +240,7 @@ export function SearchDashboard({
         ) : (
           <>
             {/* desktop table */}
-            <div className="hidden overflow-hidden rounded-lg border border-line md:block">
+            <div className="hidden overflow-visible rounded-lg border border-line md:block">
               <div className="grid grid-cols-[1.1fr_1.5fr_150px_140px_44px] items-center gap-3 border-b border-line bg-elev/70 px-4 py-2.5 text-[11px] font-semibold tracking-[0.12em] text-faint uppercase">
                 <span>Empresa</span>
                 <span>Puesto</span>
@@ -251,7 +253,7 @@ export function SearchDashboard({
                   key={app.id}
                   onClick={() => onOpenApplication(app.id)}
                   className={cn(
-                    "group grid cursor-pointer grid-cols-[1.1fr_1.5fr_150px_140px_44px] items-center gap-3 px-4 py-3 transition-colors hover:bg-brand/6",
+                    "group relative grid cursor-pointer grid-cols-[1.1fr_1.5fr_150px_140px_44px] items-center gap-3 px-4 py-3 transition-colors hover:z-10 hover:bg-brand/6 focus-within:z-20",
                     i !== filtered.length - 1 && "border-b border-line",
                   )}
                 >
@@ -267,18 +269,20 @@ export function SearchDashboard({
                     <Dropdown
                       width="w-40"
                       trigger={(open) => (
-                        <span className="inline-flex items-center gap-1">
+                        <button type="button" aria-label={`Cambiar estado de ${app.company}`} className="inline-flex items-center gap-1">
                           <StatusBadge status={app.status} />
                           <Icon name="caret" className={cn("h-3 w-3 text-faint transition-transform", open && "rotate-180")} />
-                        </span>
+                        </button>
                       )}
                     >
                       {(close) => (
                         <>
-                          <p className="px-2.5 pt-1 pb-1.5 text-[10.5px] tracking-[0.14em] text-faint uppercase">Cambiar estado</p>
+                          <div role="presentation" className="px-2.5 pt-1 pb-1.5 text-[10.5px] tracking-[0.14em] text-faint uppercase">Cambiar estado</div>
                           {STATUSES.map((s) => (
                             <button
                               key={s}
+                              type="button"
+                              role="menuitem"
                               onClick={() => {
                                 onStatusChange(app.id, s);
                                 close();
@@ -343,33 +347,47 @@ export function SearchDashboard({
             {/* mobile cards */}
             <div className="space-y-2.5 md:hidden">
               {filtered.map((app) => (
-                <button
+                <div
                   key={app.id}
-                  onClick={() => onOpenApplication(app.id)}
-                  className="w-full rounded-lg border border-line bg-panel p-4 text-left transition-colors active:bg-elev"
+                  className="rounded-lg border border-line bg-panel p-4 transition-colors"
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onOpenApplication(app.id)}
+                    className="w-full text-left focus-visible:outline-none"
+                  >
+                    <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-[14.5px] font-medium text-ink">{app.company}</p>
                       <p className="mt-0.5 truncate text-[13px] text-muted">{app.position}</p>
                     </div>
                     <StatusBadge status={app.status} />
-                  </div>
-                  <div className="mt-3 flex items-center gap-4 text-[11.5px] text-faint">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Icon name="pin" className="h-3.5 w-3.5" /> {app.location || "—"}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <Icon name="calendar" className="h-3.5 w-3.5" /> {shortDate(app.appliedAt)}
-                    </span>
-                    <Icon name="chevron" className="ml-auto h-4 w-4" />
-                  </div>
-                  {app.deadline && (
-                    <div className="mt-2">
-                      <DeadlineBadge deadline={app.deadline} />
                     </div>
-                  )}
-                </button>
+                    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px] text-faint">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Icon name="pin" className="h-3.5 w-3.5" /> {app.location || "—"}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Icon name="calendar" className="h-3.5 w-3.5" /> {shortDate(app.appliedAt)}
+                      </span>
+                      {app.deadline && <DeadlineBadge deadline={app.deadline} />}
+                    </div>
+                  </button>
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
+                    <Button variant="outline" size="xs" onClick={() => onOpenApplication(app.id)}>
+                      <Icon name="eye" className="h-3.5 w-3.5" /> Ver {app.company}
+                    </Button>
+                    <Button variant="outline" size="xs" onClick={() => onEdit(app.id)}>
+                      <Icon name="pencil" className="h-3.5 w-3.5" /> Editar {app.company}
+                    </Button>
+                    <Button variant="outline" size="xs" onClick={() => onMove(app.id)}>
+                      <Icon name="move" className="h-3.5 w-3.5" /> Mover {app.company}
+                    </Button>
+                    <Button variant="danger" size="xs" onClick={() => onDelete(app.id)}>
+                      <Icon name="trash" className="h-3.5 w-3.5" /> Eliminar {app.company}
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           </>

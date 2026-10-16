@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { cn } from "./utils/cn";
 import { Sidebar } from "./components/Sidebar";
 import { Overview } from "./components/Overview";
 import { SearchDashboard } from "./components/SearchDashboard";
@@ -12,9 +11,11 @@ import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
 import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 import * as db from "./lib/db";
-import { deleteCv, deleteEvidence, isStorageEvidencePath, uploadEvidence } from "./lib/storage";
+import { deleteCv, deleteEvidence, EVIDENCE_MAX_BYTES, isStorageEvidencePath, uploadEvidence } from "./lib/storage";
+import { applicationArchiveFilename, buildApplicationArchive } from "./lib/applicationExport";
+import { initialApplicationActivity, mergeActivityEntries, recordApplicationChanges } from "./lib/applicationActivity";
 import { importSeeds } from "./lib/seedMigrate";
-import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
+import { todayISO, uid, MAX_EVIDENCE_IMAGES, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
 type ModalState =
   | { type: "search"; editing?: Search }
@@ -43,8 +44,9 @@ export default function App() {
   const [dbLoading, setDbLoading] = useState(false);
   const [importingSeeds, setImportingSeeds] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [exportingApplicationId, setExportingApplicationId] = useState<string | null>(null);
 
-  const closeModal = () => setModal({ type: null });
+  const closeModal = useCallback(() => setModal({ type: null }), []);
   const closeGlobalSearch = useCallback(() => setGlobalSearchOpen(false), []);
   const notify = useCallback((message: string) => setToast(message), []);
 
@@ -55,6 +57,7 @@ export default function App() {
         if (modal.type === null && (!isSupabaseConfigured || user)) setGlobalSearchOpen(true);
       }
     };
+
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [modal.type, user]);
@@ -210,6 +213,32 @@ export default function App() {
   const currentSearch = "searchId" in view ? searches.find((s) => s.id === view.searchId) : undefined;
   const currentApp = view.type === "application" ? apps.find((a) => a.id === view.id) : undefined;
 
+  const exportApplication = async (application: Application, search: Search) => {
+    if (exportingApplicationId) return;
+    setExportingApplicationId(application.id);
+    try {
+      const { blob, warnings } = await buildApplicationArchive(application, search);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = applicationArchiveFilename(application);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      notify(
+        warnings.length > 0
+          ? "ZIP descargado, pero el CV asociado no estaba disponible para incluirlo."
+          : "Expediente descargado",
+      );
+    } catch (err) {
+      console.error("[export] application archive failed", err);
+      notify(err instanceof Error ? err.message : "No se pudo descargar el expediente");
+    } finally {
+      setExportingApplicationId(null);
+    }
+  };
+
   /* ------------------------------------------------------------ navigation */
 
   const openSearch = (id: string) => {
@@ -318,11 +347,28 @@ export default function App() {
   // Optimistic update keeps the UI snappy; reconcile with the DB row when persisted.
   const patchApp = (id: string, patch: Partial<Application>) => {
     const prev = apps.find((a) => a.id === id);
-    setApps((list) => list.map((a) => (a.id === id ? { ...a, ...patch, updatedAt: todayISO() } : a)));
+    const next = prev
+      ? recordApplicationChanges(prev, { ...prev, ...patch, updatedAt: todayISO() })
+      : undefined;
+    const existingEvents = prev?.activity?.length ?? 0;
+    const activityEntries = next?.activity?.slice(existingEvents) ?? [];
+    const persistedPatch = {
+      ...patch,
+      ...(activityEntries.length > 0 ? { activity: activityEntries } : {}),
+    };
+    setApps((list) => list.map((a) => (a.id === id && next ? next : a)));
     if (isSupabaseConfigured && supabase && user) {
       if (patch.images !== undefined) cleanupRemovedEvidence(prev?.images, patch.images);
-      db.patchApplication(id, patch)
-        .then((saved) => setApps((list) => list.map((a) => (a.id === id ? saved : a))))
+      db.patchApplication(id, persistedPatch)
+        .then((saved) =>
+          setApps((list) =>
+            list.map((a) =>
+              a.id === id
+                ? { ...saved, activity: mergeActivityEntries(a.activity ?? [], saved.activity ?? []) }
+                : a,
+            ),
+          ),
+        )
         .catch((err) => {
           console.error("[db] patchApplication failed", err);
           notify("No se pudo guardar el cambio");
@@ -330,7 +376,7 @@ export default function App() {
     }
   };
 
-  type ApplicationSave = Omit<Application, "id" | "createdAt" | "updatedAt"> & { newImageFiles?: File[] };
+  type ApplicationSave = Omit<Application, "id" | "createdAt" | "updatedAt" | "activity"> & { newImageFiles?: File[] };
 
   // Uploads staged evidence files into the application folder and returns
   // the storage paths. Per-file failures notify inline and skip that file.
@@ -347,14 +393,97 @@ export default function App() {
     return paths;
   };
 
+  const addApplicationEvidence = async (application: Application, files: File[]) => {
+    const remaining = MAX_EVIDENCE_IMAGES - (application.images?.length ?? 0);
+    if (remaining <= 0) {
+      notify(`Puedes adjuntar hasta ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
+      return;
+    }
+    const selected = files.slice(0, remaining);
+    const rejected: string[] = [];
+    const valid: File[] = [];
+    for (const file of selected) {
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (!["png", "jpg", "jpeg", "webp", "gif"].includes(extension) || (file.type && !file.type.startsWith("image/"))) {
+        rejected.push(`${file.name}: formato no permitido`);
+      } else if (!file.size || file.size > EVIDENCE_MAX_BYTES) {
+        rejected.push(`${file.name}: el tamaño debe ser de hasta 5 MB`);
+      } else {
+        valid.push(file);
+      }
+    }
+    if (files.length > selected.length) {
+      rejected.push(`Solo se pueden adjuntar ${remaining} imagen(es) más a esta postulación`);
+    }
+    if (valid.length === 0) {
+      if (rejected.length > 0) notify(rejected.join(". "));
+      return;
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const uploaded: string[] = [];
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        const userId = data.user?.id;
+        if (!userId) throw new Error("Inicia sesión para adjuntar imágenes.");
+        for (const file of valid) {
+          try {
+            uploaded.push(await uploadEvidence(userId, application.id, file));
+          } catch (error) {
+            console.error("[storage] uploadEvidence failed", error);
+            rejected.push(`${file.name}: ${error instanceof Error ? error.message : "no se pudo subir"}`);
+          }
+        }
+      } catch (error) {
+        console.error("[evidence] upload failed", error);
+        rejected.push(error instanceof Error ? error.message : "No se pudieron subir las imágenes");
+      }
+      if (uploaded.length > 0) patchApp(application.id, { images: [...(application.images ?? []), ...uploaded] });
+      if (uploaded.length > 0 || rejected.length > 0) {
+        notify([
+          uploaded.length > 0 ? `Se agregaron ${uploaded.length} imagen(es)` : "",
+          rejected.length > 0 ? `Algunos archivos no se agregaron: ${rejected.join(". ")}` : "",
+        ].filter(Boolean).join(". "));
+      }
+      return;
+    }
+
+    const dataUrls: string[] = [];
+    for (const file of valid) {
+      try {
+        dataUrls.push(await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("No se pudo leer el archivo."));
+          reader.onerror = () => reject(reader.error ?? new Error("No se pudo leer el archivo."));
+          reader.readAsDataURL(file);
+        }));
+      } catch (error) {
+        console.error("[evidence] local image read failed", error);
+        rejected.push(`${file.name}: no se pudo leer`);
+      }
+    }
+    if (dataUrls.length > 0) {
+      patchApp(application.id, { images: [...(application.images ?? []), ...dataUrls] });
+    }
+    if (dataUrls.length > 0 || rejected.length > 0) {
+      notify([
+        dataUrls.length > 0 ? `Se agregaron ${dataUrls.length} imagen(es)` : "",
+        rejected.length > 0 ? `Algunos archivos no se agregaron: ${rejected.join(". ")}` : "",
+      ].filter(Boolean).join(". "));
+    }
+  };
+
   const saveApplication = async (data: ApplicationSave) => {
     const { newImageFiles, ...rest } = data;
     const persisted = isSupabaseConfigured && !!supabase && !!user;
     if (modal.type === "application" && modal.editing) {
       const id = modal.editing.id;
-      const prevImages = modal.editing.images ?? [];
+      const previous = apps.find((app) => app.id === id) ?? modal.editing;
+      const prevImages = previous.images ?? [];
       if (!persisted) {
-        setApps((list) => list.map((a) => (a.id === id ? { ...a, ...rest, updatedAt: todayISO() } : a)));
+        const next = recordApplicationChanges(previous, { ...previous, ...rest, updatedAt: todayISO() });
+        setApps((list) => list.map((a) => (a.id === id ? next : a)));
         closeModal();
         notify("Postulación actualizada");
         return;
@@ -369,7 +498,10 @@ export default function App() {
           if (!userId) throw new Error("No active session.");
           images = [...images, ...(await uploadStagedEvidence(userId, id, newImageFiles))];
         }
-        const saved = await db.updateApplication(id, { ...rest, images });
+        const next = recordApplicationChanges(previous, { ...previous, ...rest, images, updatedAt: todayISO() });
+        const existingEvents = previous.activity?.length ?? 0;
+        const activityEntries = next.activity?.slice(existingEvents) ?? [];
+        const saved = await db.updateApplication(id, { ...rest, images, activity: activityEntries });
         cleanupRemovedEvidence(prevImages, images);
         setApps((list) => list.map((a) => (a.id === id ? saved : a)));
         closeModal();
@@ -386,6 +518,7 @@ export default function App() {
         id: uid("a"),
         createdAt: todayISO(),
         updatedAt: todayISO(),
+        activity: initialApplicationActivity(rest.status),
       };
       setApps((list) => [app, ...list]);
       setExpanded((e) => ({ ...e, [app.searchId]: true }));
@@ -396,7 +529,11 @@ export default function App() {
     }
     try {
       // The row must exist first: Storage paths embed the applicationId.
-      const app = await db.createApplication({ ...rest, images: rest.images ?? [] });
+      const app = await db.createApplication({
+        ...rest,
+        images: rest.images ?? [],
+        activity: initialApplicationActivity(rest.status),
+      });
       let finalApp = app;
       if (newImageFiles?.length && supabase) {
         const { data: session } = await supabase.auth.getUser();
@@ -477,14 +614,20 @@ export default function App() {
         setExpanded((e) => ({ ...e, [finalTarget]: true }));
       }
 
+      // Storage paths embed the applicationId (not the searchId), so moving
+      // across searches keeps every evidence/CV object valid — no file work.
+      const moved = recordApplicationChanges(app, {
+        ...app,
+        searchId: finalTarget,
+        updatedAt: todayISO(),
+      });
       if (persisted) {
-        // Storage paths embed the applicationId (not the searchId), so moving
-        // across searches keeps every evidence/CV object valid — no file work.
-        await db.moveApplication(appId, finalTarget);
+        await db.patchApplication(appId, {
+          searchId: finalTarget,
+          activity: moved.activity?.slice(app.activity?.length ?? 0) ?? [],
+        });
       }
-      setApps((list) =>
-        list.map((a) => (a.id === appId ? { ...a, searchId: finalTarget, updatedAt: todayISO() } : a)),
-      );
+      setApps((list) => list.map((a) => (a.id === appId ? moved : a)));
       setExpanded((e) => ({ ...e, [finalTarget]: true }));
       closeModal();
       if (view.type === "application") setView({ type: "dashboard", searchId: finalTarget });
@@ -524,75 +667,21 @@ export default function App() {
   const pointHandlers = {
     onAddPoint: async (title: string, content: string) => {
       if (!currentApp) return;
-      const appId = currentApp.id;
-      if (!isSupabaseConfigured || !supabase || !user) {
-        const point: InterestPoint = { id: uid("p"), title, content };
-        patchApp(appId, { points: [...currentApp.points, point] });
-        notify("Punto de interés agregado");
-        return;
-      }
-      try {
-        const point = await db.addPoint(appId, title, content);
-        setApps((list) =>
-          list.map((a) =>
-            a.id === appId ? { ...a, points: [...a.points, point], updatedAt: todayISO() } : a,
-          ),
-        );
-        notify("Punto de interés agregado");
-      } catch (err) {
-        console.error("[db] addPoint failed", err);
-        notify("No se pudo agregar el punto");
-      }
+      const point: InterestPoint = { id: uid("p"), title, content };
+      patchApp(currentApp.id, { points: [...currentApp.points, point] });
+      notify("Punto de interés agregado");
     },
     onSavePoint: async (pointId: string, title: string, content: string) => {
       if (!currentApp) return;
-      const appId = currentApp.id;
-      if (!isSupabaseConfigured || !supabase || !user) {
-        patchApp(appId, { points: currentApp.points.map((p) => (p.id === pointId ? { ...p, title, content } : p)) });
-        notify("Punto actualizado");
-        return;
-      }
-      try {
-        await db.savePoint(pointId, title, content);
-        setApps((list) =>
-          list.map((a) =>
-            a.id === appId
-              ? {
-                  ...a,
-                  points: a.points.map((p) => (p.id === pointId ? { ...p, title, content } : p)),
-                  updatedAt: todayISO(),
-                }
-              : a,
-          ),
-        );
-        notify("Punto actualizado");
-      } catch (err) {
-        console.error("[db] savePoint failed", err);
-        notify("No se pudo actualizar el punto");
-      }
+      patchApp(currentApp.id, {
+        points: currentApp.points.map((point) => (point.id === pointId ? { ...point, title, content } : point)),
+      });
+      notify("Punto actualizado");
     },
     onDeletePoint: async (pointId: string) => {
       if (!currentApp) return;
-      const appId = currentApp.id;
-      if (!isSupabaseConfigured || !supabase || !user) {
-        patchApp(appId, { points: currentApp.points.filter((p) => p.id !== pointId) });
-        notify("Punto eliminado");
-        return;
-      }
-      try {
-        await db.deletePoint(pointId);
-        setApps((list) =>
-          list.map((a) =>
-            a.id === appId
-              ? { ...a, points: a.points.filter((p) => p.id !== pointId), updatedAt: todayISO() }
-              : a,
-          ),
-        );
-        notify("Punto eliminado");
-      } catch (err) {
-        console.error("[db] deletePoint failed", err);
-        notify("No se pudo eliminar el punto");
-      }
+      patchApp(currentApp.id, { points: currentApp.points.filter((point) => point.id !== pointId) });
+      notify("Punto eliminado");
     },
   };
 
@@ -658,59 +747,61 @@ export default function App() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* top bar */}
-        <header className="relative flex h-14 shrink-0 items-center gap-3 border-b border-line bg-surface/80 px-4 backdrop-blur sm:px-5">
+        <header className="relative flex h-auto shrink-0 flex-col items-stretch gap-0 border-b border-line bg-surface/80 px-4 pt-1 pb-2 backdrop-blur sm:h-14 sm:flex-row sm:items-center sm:gap-3 sm:px-5 sm:py-0">
           <div className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-brand/45 to-transparent" />
-          <button
-            onClick={() => setDrawer(true)}
-            className="inline-flex h-8.5 w-8.5 items-center justify-center rounded-md text-muted transition-colors hover:bg-white/6 hover:text-ink lg:hidden"
-            aria-label="Abrir menú"
-          >
-            <Icon name="menu" className="h-4.5 w-4.5" />
-          </button>
-
-          <div className="hidden items-center gap-2 lg:flex">
-            <span className="text-[13px] font-medium text-ink">JobTrack</span>
-            <span className="text-faint">/</span>
-            <span className="max-w-[280px] truncate text-[13px] text-muted">{breadcrumb}</span>
-          </div>
-
-          <div className="flex items-center gap-2 lg:hidden">
-            <span className="text-[13.5px] font-medium text-ink">JobTrack</span>
-            <span className="truncate text-[12px] text-faint">{breadcrumb}</span>
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex h-12 w-full shrink-0 items-center gap-3 sm:h-full sm:flex-1">
             <button
-              onClick={() => setGlobalSearchOpen(true)}
-              className="flex h-8.5 items-center gap-2 rounded-md border border-line bg-base/60 px-2.5 text-[12.5px] text-faint transition-colors hover:border-brand/50 hover:text-muted"
-              aria-label="Abrir búsqueda global"
+              onClick={() => setDrawer(true)}
+              className="inline-flex h-8.5 w-8.5 items-center justify-center rounded-md text-muted transition-colors hover:bg-white/6 hover:text-ink lg:hidden"
+              aria-label="Abrir menú"
             >
-              <Icon name="search" className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Buscar postulaciones…</span>
-              <span className="rounded border border-line2 px-1 font-mono text-[10px]">⌘K</span>
+              <Icon name="menu" className="h-4.5 w-4.5" />
             </button>
 
-            {user ? (
-              <div className="flex items-center gap-2">
-                <div
-                  title={user}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-brand/30 bg-brand/12 text-[11.5px] font-semibold text-brand-soft"
-                >
-                  {user.slice(0, 1).toUpperCase()}
+            <div className="hidden items-center gap-2 lg:flex">
+              <span className="text-[13px] font-medium text-ink">JobTrack</span>
+              <span className="text-faint">/</span>
+              <span className="max-w-[280px] truncate text-[13px] text-muted">{breadcrumb}</span>
+            </div>
+
+            <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
+              <span className="shrink-0 text-[13.5px] font-medium text-ink">JobTrack</span>
+              <span className="truncate text-[12px] text-faint max-sm:hidden">{breadcrumb}</span>
+            </div>
+
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <button
+                onClick={() => setGlobalSearchOpen(true)}
+                className="flex h-8.5 items-center gap-2 rounded-md border border-line bg-base/60 px-2.5 text-[12.5px] text-faint transition-colors hover:border-brand/50 hover:text-muted"
+                aria-label="Abrir búsqueda global"
+              >
+                <Icon name="search" className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Buscar postulaciones…</span>
+                <span className="rounded border border-line2 px-1 font-mono text-[10px]">⌘K</span>
+              </button>
+
+              {user ? (
+                <div className="flex shrink-0 items-center">
+                  <button
+                    onClick={handleSignOut}
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-line bg-panel px-3 text-[12.5px] font-medium text-ink transition-colors hover:border-line2 hover:bg-elev focus-visible:outline-offset-2"
+                  >
+                    Salir
+                  </button>
                 </div>
-                <button
-                  onClick={handleSignOut}
-                  className="text-[12px] text-muted transition-colors hover:text-ink"
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="hidden h-9 px-3 text-[12.5px] sm:inline-flex"
+                  onClick={() => setModal({ type: "login" })}
                 >
-                  Salir
-                </button>
-              </div>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => setModal({ type: "login" })}>
-                Iniciar sesión
-              </Button>
-            )}
+                  Iniciar sesión
+                </Button>
+              )}
+            </div>
           </div>
+
         </header>
 
         {/* main */}
@@ -784,6 +875,10 @@ export default function App() {
                 onNewApplication={() => setModal({ type: "application", searchId: currentSearch.id })}
                 onRenameSearch={() => setModal({ type: "search", editing: currentSearch })}
                 onDeleteSearch={() => setModal({ type: "confirm-search", id: currentSearch.id })}
+                onEdit={(id) => {
+                  const application = apps.find((item) => item.id === id);
+                  if (application) setModal({ type: "application", editing: application });
+                }}
                 onStatusChange={(id, status) => {
                   patchApp(id, { status });
                   notify(`Estado actualizado a ${status}`);
@@ -816,6 +911,9 @@ export default function App() {
                   notify("Notas guardadas");
                 }}
                 onOpenCvModal={() => setModal({ type: "cv", appId: currentApp.id })}
+                onExportArchive={() => void exportApplication(currentApp, searches.find((s) => s.id === currentApp.searchId)!)}
+                exportingArchive={exportingApplicationId === currentApp.id}
+                onAddEvidenceFiles={(files) => addApplicationEvidence(currentApp, files)}
                 onRemoveCv={() => {
                   const path = currentApp.cv?.path;
                   patchApp(currentApp.id, { cv: null });
@@ -848,6 +946,7 @@ export default function App() {
         open={globalSearchOpen}
         applications={apps}
         searches={searches}
+        requiresLogin={locked}
         onClose={closeGlobalSearch}
         onOpenApplication={openApp}
       />
@@ -913,13 +1012,11 @@ export default function App() {
       />
 
       {/* footer hint */}
-      <div
-        className={cn(
-          "pointer-events-none fixed right-4 bottom-4 hidden font-mono text-[10.5px] text-faint/70 xl:block",
-        )}
-      >
-        prototipo · sin backend
-      </div>
+      {!isSupabaseConfigured && (
+        <div className="pointer-events-none fixed right-4 bottom-4 hidden font-mono text-[10.5px] text-faint/70 xl:block">
+          prototipo · sin backend
+        </div>
+      )}
     </div>
   );
 }

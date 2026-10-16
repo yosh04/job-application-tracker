@@ -1,12 +1,6 @@
+1. agrega la función de arrastar el archivo en el tema del cv porfa 
 
+2. En la vista general de la carpeta de "Busqueda" palabras clave para que te ubiques" -> "Postulaciones
+Todas1
+Rechazado1" al cambiar desde aca los estados rompe el diseño visual. haz que este enten mas arriba en el Z. Ya que al activar el cambio de estado como que empuja. 
 
-1. Falta agregar el estado de "Sin respuesta", "Contratado".
-2. Hace falta un input para la fecha limite, es opcional puede no tener. Colocarla después de " Aplicó el 22/10/2026
-"
-3. Al crea una nueva busqueda. Coloca ejemplos: mas variados. "Ejemplos: Desarrollador Angular, Backend Developer, Trabajo remoto, Empresas de Costa Rica.". 
-
-4. Elimina el circulo "CR" nada que ver. 
-
-5. Me gustaría implementar un login, ten en cuenta que voy a utilizar supabase. 
-
-6. Me gustaría que crearas un archivo que mostrara las tareas generales y simples que necesitaria implementar para llevar acabo este proyecto. 

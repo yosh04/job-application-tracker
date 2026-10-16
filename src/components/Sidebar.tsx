@@ -143,14 +143,16 @@ export function Sidebar({
                   <Dropdown
                     width="w-44"
                     trigger={(open) => (
-                      <span
+                      <IconButton
+                        type="button"
+                        label={`Opciones de ${search.name}`}
                         className={cn(
                           "flex h-6 w-6 items-center justify-center rounded text-faint transition-opacity hover:bg-white/8 hover:text-ink",
                           open ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                         )}
                       >
                         <Icon name="dots" className="h-4 w-4" />
-                      </span>
+                      </IconButton>
                     )}
                   >
                     {(close) => (
