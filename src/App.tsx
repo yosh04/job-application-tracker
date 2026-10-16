@@ -10,6 +10,7 @@ import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
 import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 import * as db from "./lib/db";
+import { importSeeds } from "./lib/seedMigrate";
 import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
 type ModalState =
@@ -37,6 +38,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [user, setUser] = useState<string | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
+  const [importingSeeds, setImportingSeeds] = useState(false);
 
   const closeModal = () => setModal({ type: null });
   const notify = useCallback((message: string) => setToast(message), []);
@@ -163,6 +165,31 @@ export default function App() {
     setUser(null);
     notify("Sesión cerrada");
   }, [notify]);
+
+  // One-shot seed import: explicit user action only, never automatic.
+  // Reloads the workspace so ids come from the DB, then notifies counts.
+  const handleImportSeeds = useCallback(async () => {
+    if (importingSeeds) return;
+    setImportingSeeds(true);
+    try {
+      const { searches: searchCount, applications: appCount } = await importSeeds();
+      const { searches: loaded, applications } = await db.loadWorkspace();
+      setSearches(loaded);
+      setApps(applications);
+      setExpanded((e) => {
+        const next = { ...e };
+        for (const s of loaded) if (!(s.id in next)) next[s.id] = true;
+        return next;
+      });
+      setView({ type: "overview" });
+      notify(`Datos de ejemplo importados: ${searchCount} búsquedas, ${appCount} postulaciones`);
+    } catch (err) {
+      console.error("[db] importSeeds failed", err);
+      notify(err instanceof Error ? err.message : "No se pudieron importar los datos de ejemplo");
+    } finally {
+      setImportingSeeds(false);
+    }
+  }, [importingSeeds, notify]);
 
   const currentSearch = "searchId" in view ? searches.find((s) => s.id === view.searchId) : undefined;
   const currentApp = view.type === "application" ? apps.find((a) => a.id === view.id) : undefined;
@@ -610,6 +637,14 @@ export default function App() {
                   <span>Inicia sesión para gestionar tus búsquedas y postulaciones.</span>
                   <Button variant="primary" size="sm" onClick={openLogin}>
                     Iniciar sesión
+                  </Button>
+                </div>
+              )}
+              {isSupabaseConfigured && user && searches.length === 0 && (
+                <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-line2 bg-surface/40 px-4 py-3 text-[13px] text-muted sm:mx-5">
+                  <span>Tu cuenta está vacía. Puedes empezar con los datos de ejemplo del prototipo.</span>
+                  <Button variant="outline" size="sm" onClick={handleImportSeeds} disabled={importingSeeds}>
+                    {importingSeeds ? "Importando…" : "Importar datos de ejemplo"}
                   </Button>
                 </div>
               )}
