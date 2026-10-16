@@ -10,20 +10,17 @@ export function LoginModal({
   onLogin,
   onRegister,
   onRecovery,
-  onGoogle,
 }: {
   open: boolean;
   onClose: () => void;
   onLogin: (email: string, password: string) => Promise<void>;
   onRegister: (email: string, password: string) => Promise<"confirmed" | "check-email">;
   onRecovery: (email: string) => Promise<void>;
-  onGoogle: () => Promise<void>;
 }) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
-  const [googlePending, setGooglePending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -35,7 +32,6 @@ export function LoginModal({
       setError(null);
       setSuccess(null);
       setPending(false);
-      setGooglePending(false);
     }
   }, [open ]);
 
@@ -75,19 +71,6 @@ export function LoginModal({
     }
   };
 
-  // Google OAuth redirects away on success; only failures surface inline.
-  const submitGoogle = async () => {
-    if (googlePending || pending) return;
-    setGooglePending(true);
-    setError(null);
-    try {
-      await onGoogle();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo iniciar sesión con Google.");
-    } finally {
-      setGooglePending(false);
-    }
-  };
   const title = mode === "login" ? "Iniciar sesión" : mode === "register" ? "Crear cuenta" : "Recuperar contraseña";
   const subtitle = isSupabaseConfigured
     ? mode === "login"
@@ -128,24 +111,6 @@ export function LoginModal({
       }
     >
       <div className="space-y-4">
-        {isSupabaseConfigured && (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              disabled={pending || googlePending}
-              onClick={() => void submitGoogle()}
-            >
-              {googlePending ? "Conectando con Google…" : "Continuar con Google"}
-            </Button>
-            <div className="flex items-center gap-3 text-[11px] text-faint">
-              <span className="h-px flex-1 bg-line" />
-              <span>o</span>
-              <span className="h-px flex-1 bg-line" />
-            </div>
-          </>
-        )}
         <div>
           <Label>Correo electrónico</Label>
           <Input

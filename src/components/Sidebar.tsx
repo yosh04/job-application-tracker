@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
 import { cn } from "../utils/cn";
 import { Icon, IconButton, Dropdown, MenuItem, MenuSeparator, StatusDot } from "./ui";
 import type { Application, Search, View } from "../types";
+import { userDisplayName } from "../lib/userDisplayName";
 
 export function Sidebar({
+  userEmail,
   searches,
   applications,
   view,
@@ -18,6 +21,7 @@ export function Sidebar({
   onNewApplication,
   onClose,
 }: {
+  userEmail: string | null;
   searches: Search[];
   applications: Application[];
   view: View;
@@ -33,6 +37,37 @@ export function Sidebar({
   onNewApplication: (searchId: string) => void;
   onClose?: () => void;
 }) {
+  const [editingAlias, setEditingAlias] = useState(false);
+  const [aliasDraft, setAliasDraft] = useState("");
+  const [alias, setAlias] = useState(() => {
+    if (!userEmail) return userDisplayName(userEmail);
+    return localStorage.getItem(`jobtrack:alias:${userEmail.toLowerCase()}`) || userDisplayName(userEmail);
+  });
+
+  useEffect(() => {
+    const savedAlias = userEmail ? localStorage.getItem(`jobtrack:alias:${userEmail.toLowerCase()}`) : null;
+    setAlias(savedAlias || userDisplayName(userEmail));
+    setEditingAlias(false);
+  }, [userEmail]);
+
+  const startAliasEdit = () => {
+    setAliasDraft(alias);
+    setEditingAlias(true);
+  };
+
+  const cancelAliasEdit = () => {
+    setAliasDraft(alias);
+    setEditingAlias(false);
+  };
+
+  const saveAlias = () => {
+    const nextAlias = aliasDraft.trim();
+    if (!nextAlias) return;
+    if (userEmail) localStorage.setItem(`jobtrack:alias:${userEmail.toLowerCase()}`, nextAlias);
+    setAlias(nextAlias);
+    setEditingAlias(false);
+  };
+
   const activeSearchId = view.type !== "overview" ? ("searchId" in view ? view.searchId : undefined) : undefined;
   const activeAppId = view.type === "application" ? view.id : undefined;
 
@@ -49,7 +84,51 @@ export function Sidebar({
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[14.5px] leading-none font-semibold tracking-tight text-ink">JobTrack</p>
-          <p className="mt-1 truncate text-[10.5px] tracking-wide text-faint">CONTROL DE POSTULACIONES</p>
+          {editingAlias ? (
+            <form
+              className="mt-1 flex min-w-0 items-center gap-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveAlias();
+              }}
+            >
+              <input
+                aria-label="Alias de usuario"
+                autoFocus
+                value={aliasDraft}
+                onChange={(event) => setAliasDraft(event.target.value)}
+                onKeyDown={(event) => event.key === "Escape" && cancelAliasEdit()}
+                maxLength={40}
+                className="h-6 min-w-0 flex-1 rounded border border-line2 bg-base px-1.5 text-[11px] text-ink outline-none focus:border-brand"
+              />
+              <button
+                type="button"
+                aria-label="Cancelar alias"
+                onClick={cancelAliasEdit}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-faint hover:bg-white/8 hover:text-ink"
+              >
+                <Icon name="x" className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="submit"
+                aria-label="Guardar alias"
+                disabled={!aliasDraft.trim()}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand-soft hover:bg-brand/10 disabled:opacity-40"
+              >
+                <Icon name="check" className="h-3.5 w-3.5" />
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={startAliasEdit}
+              aria-label={`Editar alias: ${alias}`}
+              title="Editar alias"
+              className="mt-1 block max-w-full truncate text-left text-[10.5px] tracking-wide text-faint hover:text-ink"
+            >
+              {alias}
+            </button>
+          )}
         </div>
         {onClose && (
           <IconButton label="Cerrar menú" onClick={onClose} className="lg:hidden">

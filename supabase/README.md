@@ -143,11 +143,10 @@ builds fail if either Supabase variable is missing. Before the first deploy:
    exact local development origin as well (for example
    `http://localhost:5173/**` or `http://127.0.0.1:5175/**`, matching the URL
    you actually use).
-4. If you enable Google OAuth, register the Supabase callback URL shown in
-   the Supabase Google provider settings with Google; the Netlify site URL is
-   the allowed post-login redirect, not Google's OAuth callback URL.
-5. Deploy, then verify sign-up/sign-in/sign-out, data isolation with separate
+4. Deploy, then verify email/password sign-up, sign-in, sign-out, data isolation with separate
    users, CV upload/download, evidence image upload, and application activity.
 
 The Supabase anon/publishable key is intended for browser use; keep service
 role keys and other secrets out of `VITE_*` variables and client code.
+Google OAuth is currently disabled; JobTrack uses email and password for
+authentication.

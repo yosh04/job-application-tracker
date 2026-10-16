@@ -25,7 +25,7 @@ Estado actual: autenticación, persistencia y Storage (Fases 1–3), filtros/bú
 - [x] Mantener sesión persistente y exponer `user` en `App.tsx` (hoy `useState<string | null>`)
 - [x] Proteger vistas: si no hay `user`, mostrar solo login/overview limitado
 - [x] Definir variables `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` en `.env` local (fuera de git)
-- [x] Extra: login con Google OAuth 2.0 (`signInWithOAuth`; pendiente activar provider en Dashboard)
+- [ ] Login con Google OAuth (deshabilitado; el flujo activo usa correo y contraseña)
 
 ## Fase 2 — Persistencia en base de datos
 

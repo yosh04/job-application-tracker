@@ -173,16 +173,6 @@ export default function App() {
     [notify],
   );
 
-  const handleGoogle = useCallback(async () => {
-    if (!supabase) return;
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: window.location.origin },
-    });
-    if (error) throw error;
-    // Success path redirects away; session resolves via getSession + onAuthStateChange.
-  }, []);
-
   const handleSignOut = useCallback(async () => {
     if (supabase) {
       await supabase.auth.signOut();
@@ -715,6 +705,7 @@ export default function App() {
 
   const sidebar = (
     <Sidebar
+      userEmail={user}
       searches={searches}
       applications={apps}
       view={view}
@@ -821,7 +812,7 @@ export default function App() {
           {view.type === "overview" && (
             <>
               {locked && (
-                <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand/30 bg-brand/10 px-4 py-3 text-[13px] text-ink sm:mx-5">
+                <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand/30 bg-brand/10 px-4 py-3 text-[13px] text-ink lg:hidden">
                   <span>Inicia sesión para gestionar tus búsquedas y postulaciones.</span>
                   <Button variant="primary" size="sm" onClick={openLogin}>
                     Iniciar sesión
@@ -1014,7 +1005,6 @@ export default function App() {
         onLogin={handleLogin}
         onRegister={handleRegister}
         onRecovery={handleRecovery}
-        onGoogle={handleGoogle}
       />
 
       {/* footer hint */}
