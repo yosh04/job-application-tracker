@@ -4,6 +4,8 @@ import { Sidebar } from "./components/Sidebar";
 import { Overview } from "./components/Overview";
 import { SearchDashboard } from "./components/SearchDashboard";
 import { ApplicationView } from "./components/ApplicationView";
+import { DeadlineAgenda } from "./components/DeadlineAgenda";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { ApplicationModal, ConfirmModal, CVModal, MoveModal, SearchModal, Toast } from "./components/Modals";
 import { LoginModal } from "./components/LoginModal";
 import { Button, Icon } from "./components/ui";
@@ -40,9 +42,22 @@ export default function App() {
   const [user, setUser] = useState<string | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
   const [importingSeeds, setImportingSeeds] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
 
   const closeModal = () => setModal({ type: null });
+  const closeGlobalSearch = useCallback(() => setGlobalSearchOpen(false), []);
   const notify = useCallback((message: string) => setToast(message), []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        if (modal.type === null && (!isSupabaseConfigured || user)) setGlobalSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [modal.type, user]);
 
   // Sync React state with the Supabase auth session (keeps email-string shape).
   // Resolve OAuth redirect sessions, then clean the URL hash for a tidy UI.
@@ -591,6 +606,8 @@ export default function App() {
   const breadcrumb =
     view.type === "overview"
       ? "Resumen general"
+      : view.type === "agenda"
+        ? "Agenda de vencimientos"
       : view.type === "dashboard"
         ? currentSearch?.name ?? ""
         : `${searches.find((s) => s.id === currentApp?.searchId)?.name ?? ""} / ${currentApp?.company ?? ""}`;
@@ -612,6 +629,10 @@ export default function App() {
       onSelectApplication={openApp}
       onOverview={() => {
         setView({ type: "overview" });
+        setDrawer(false);
+      }}
+      onAgenda={() => {
+        setView({ type: "agenda" });
         setDrawer(false);
       }}
       onNewSearch={() => setModal({ type: "search" })}
@@ -659,26 +680,15 @@ export default function App() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
-            <div className="relative hidden md:block">
-              <Icon name="search" className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
-              <input
-                placeholder="Buscar postulaciones…"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const q = (e.target as HTMLInputElement).value.trim().toLowerCase();
-                    if (!q) return;
-                    const found = apps.find(
-                      (a) => a.company.toLowerCase().includes(q) || a.position.toLowerCase().includes(q),
-                    );
-                    if (found) openApp(found.id);
-                  }
-                }}
-                className="h-8.5 w-[190px] rounded-md border border-line bg-base/60 pr-8 pl-8 text-[12.5px] text-ink transition-colors placeholder:text-faint focus:w-[240px] focus:border-brand/50 focus:outline-none"
-              />
-              <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 font-mono text-[10px] text-faint">
-                ⌘K
-              </span>
-            </div>
+            <button
+              onClick={() => setGlobalSearchOpen(true)}
+              className="flex h-8.5 items-center gap-2 rounded-md border border-line bg-base/60 px-2.5 text-[12.5px] text-faint transition-colors hover:border-brand/50 hover:text-muted"
+              aria-label="Abrir búsqueda global"
+            >
+              <Icon name="search" className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Buscar postulaciones…</span>
+              <span className="rounded border border-line2 px-1 font-mono text-[10px]">⌘K</span>
+            </button>
 
             {user ? (
               <div className="flex items-center gap-2">
@@ -736,8 +746,17 @@ export default function App() {
                 onOpenApplication={openApp}
                 onNewSearch={() => setModal({ type: "search" })}
                 onNewApplication={() => setModal({ type: "application", searchId: searches[0]?.id })}
+                onOpenAgenda={() => setView({ type: "agenda" })}
               />
             </>
+          )}
+
+          {!locked && view.type === "agenda" && (
+            <DeadlineAgenda
+              applications={apps}
+              searches={searches}
+              onOpenApplication={openApp}
+            />
           )}
 
           {locked && view.type !== "overview" && (
@@ -823,6 +842,14 @@ export default function App() {
         onClose={closeModal}
         editing={modal.type === "search" ? modal.editing : undefined}
         onSave={(data) => (modal.type === "search" && modal.editing ? updateSearch(modal.editing.id, data) : createSearch(data))}
+      />
+
+      <GlobalSearch
+        open={globalSearchOpen}
+        applications={apps}
+        searches={searches}
+        onClose={closeGlobalSearch}
+        onOpenApplication={openApp}
       />
 
       <ApplicationModal

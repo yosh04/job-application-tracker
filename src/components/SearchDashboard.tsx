@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { cn } from "../utils/cn";
 import { Button, Empty, Icon, IconButton, StatusBadge, StatusDot, Dropdown, MenuItem, MenuSeparator } from "./ui";
 import { shortDate, type Application, type Search, type Status, STATUSES } from "../types";
+import { DeadlineBadge } from "./DeadlineBadge";
 
 function StatCard({
   value,
@@ -238,7 +239,7 @@ export function SearchDashboard({
           <>
             {/* desktop table */}
             <div className="hidden overflow-hidden rounded-lg border border-line md:block">
-              <div className="grid grid-cols-[1.1fr_1.5fr_150px_110px_44px] items-center gap-3 border-b border-line bg-elev/70 px-4 py-2.5 text-[11px] font-semibold tracking-[0.12em] text-faint uppercase">
+              <div className="grid grid-cols-[1.1fr_1.5fr_150px_140px_44px] items-center gap-3 border-b border-line bg-elev/70 px-4 py-2.5 text-[11px] font-semibold tracking-[0.12em] text-faint uppercase">
                 <span>Empresa</span>
                 <span>Puesto</span>
                 <span>Estado</span>
@@ -250,7 +251,7 @@ export function SearchDashboard({
                   key={app.id}
                   onClick={() => onOpenApplication(app.id)}
                   className={cn(
-                    "group grid cursor-pointer grid-cols-[1.1fr_1.5fr_150px_110px_44px] items-center gap-3 px-4 py-3 transition-colors hover:bg-brand/6",
+                    "group grid cursor-pointer grid-cols-[1.1fr_1.5fr_150px_140px_44px] items-center gap-3 px-4 py-3 transition-colors hover:bg-brand/6",
                     i !== filtered.length - 1 && "border-b border-line",
                   )}
                 >
@@ -296,7 +297,10 @@ export function SearchDashboard({
                       )}
                     </Dropdown>
                   </div>
-                  <span className="font-mono text-[12px] text-faint">{shortDate(app.appliedAt)}</span>
+                  <div className="flex min-w-0 flex-col items-start gap-1">
+                    <span className="font-mono text-[12px] text-faint">{shortDate(app.appliedAt)}</span>
+                    <DeadlineBadge deadline={app.deadline} />
+                  </div>
                   <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
                     <Dropdown
                       trigger={(open) => (
@@ -360,6 +364,11 @@ export function SearchDashboard({
                     </span>
                     <Icon name="chevron" className="ml-auto h-4 w-4" />
                   </div>
+                  {app.deadline && (
+                    <div className="mt-2">
+                      <DeadlineBadge deadline={app.deadline} />
+                    </div>
+                  )}
                 </button>
               ))}
             </div>

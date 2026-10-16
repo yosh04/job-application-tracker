@@ -58,6 +58,7 @@ export interface Search {
 
 export type View =
   | { type: "overview" }
+  | { type: "agenda" }
   | { type: "dashboard"; searchId: string }
   | { type: "application"; id: string };
 

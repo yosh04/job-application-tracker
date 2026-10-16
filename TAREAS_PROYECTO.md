@@ -47,22 +47,22 @@ Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage 
 
 ### 4a — Búsqueda global real
 
-- [ ] Reemplazar "Enter abre el primer match" por lista de múltiples resultados
-- [ ] Buscar en empresa, puesto, ubicación y notas
-- [ ] Hacer funcional el atajo `⌘K` / `Ctrl+K` para abrir la búsqueda
+- [x] Reemplazar "Enter abre el primer match" por lista de múltiples resultados
+- [x] Buscar en empresa, puesto, ubicación y notas
+- [x] Hacer funcional el atajo `⌘K` / `Ctrl+K` para abrir la búsqueda
 
 ### 4b — Filtros combinados y ordenamiento
 
-- [ ] Filtros combinados por estado + búsqueda, aplicables cross-search (todas las búsquedas)
-- [ ] Ordenamiento por `appliedAt` asc/desc
-- [ ] Ordenamiento por `deadline` asc/desc (respetando que es opcional)
+- [x] Filtros combinados por estado + búsqueda, aplicables cross-search (todas las búsquedas)
+- [x] Ordenamiento por `appliedAt` asc/desc
+- [x] Ordenamiento por `deadline` asc/desc (respetando que es opcional)
 
 ## Fase 5 — Fechas y recordatorios
 
-- [x] Resaltado de fecha límite vencida o próxima en `ApplicationView` (parcial: existe en detalle, falta en resto)
-- [ ] Agregar badge de vencimiento en dashboard y overview
-- [ ] Crear vista agenda ordenada por `deadline` (próximos vencimientos)
-- [ ] Recordatorios por correo vía Edge Function + cron (decisión de alcance: definir frecuencia y plantilla antes de implementar)
+- [x] Resaltado de fecha límite vencida o próxima en detalle, dashboard y overview
+- [x] Agregar badge de vencimiento en dashboard y overview
+- [x] Crear vista agenda ordenada por `deadline` (vencidas y próximos vencimientos)
+- [ ] Recordatorios por correo vía Edge Function + cron (decisión de alcance: definir frecuencia y plantilla antes de implementar) NO IMPLEMENTAR. 
 
 ## Fase 6 — Despliegue
 

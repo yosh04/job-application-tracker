@@ -1,6 +1,8 @@
 import { cn } from "../utils/cn";
 import { Button, Icon, IconButton, StatusBadge } from "./ui";
 import { shortDate, type Application, type Search } from "../types";
+import { sortByDeadline } from "../lib/deadlines";
+import { DeadlineBadge } from "./DeadlineBadge";
 
 function BigStat({ value, label, accent }: { value: number | string; label: string; accent?: boolean }) {
   return (
@@ -31,6 +33,7 @@ export function Overview({
   onOpenApplication,
   onNewSearch,
   onNewApplication,
+  onOpenAgenda,
 }: {
   searches: Search[];
   applications: Application[];
@@ -38,6 +41,7 @@ export function Overview({
   onOpenApplication: (id: string) => void;
   onNewSearch: () => void;
   onNewApplication: () => void;
+  onOpenAgenda: () => void;
 }) {
   const count = (s: StatusOrString) => applications.filter((a) => a.status === s).length;
   const interviews = count("Entrevista");
@@ -46,6 +50,7 @@ export function Overview({
   const rate = applications.length ? Math.round((answered / applications.length) * 100) : 0;
 
   const recent = [...applications].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 6);
+  const upcomingDeadlines = sortByDeadline([...applications]).slice(0, 5);
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-5 py-7 sm:px-8 sm:py-9">
@@ -75,6 +80,40 @@ export function Overview({
         <BigStat value={offers} label="Ofertas" />
         <BigStat value={`${rate}%`} label="Tasa de respuesta" />
       </div>
+
+      <section className="mt-9">
+        <div className="mb-3.5 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight text-ink">Vencimientos más cercanos</h2>
+            <p className="mt-1 text-[12px] text-muted">Fechas límite ordenadas por proximidad.</p>
+          </div>
+          <Button variant="outline" size="xs" onClick={onOpenAgenda}>
+            <Icon name="calendar" /> Ver agenda
+          </Button>
+        </div>
+        {upcomingDeadlines.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-line2 bg-surface/30 px-4 py-5 text-[12.5px] text-faint">
+            No hay postulaciones con fecha límite.
+          </p>
+        ) : (
+          <div className="divide-line overflow-hidden rounded-xl border border-line bg-panel">
+            {upcomingDeadlines.map((application) => (
+              <button
+                key={application.id}
+                onClick={() => onOpenApplication(application.id)}
+                className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-brand/6"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-medium text-ink">{application.company}</span>
+                  <span className="block truncate text-[11.5px] text-muted">{application.position}</span>
+                </span>
+                <DeadlineBadge deadline={application.deadline} />
+                <StatusBadge status={application.status} className="hidden sm:inline-flex" />
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="mt-9">
         <div className="mb-3.5 flex items-center justify-between">

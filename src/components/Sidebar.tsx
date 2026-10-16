@@ -11,6 +11,7 @@ export function Sidebar({
   onSelectSearch,
   onSelectApplication,
   onOverview,
+  onAgenda,
   onNewSearch,
   onRenameSearch,
   onDeleteSearch,
@@ -25,6 +26,7 @@ export function Sidebar({
   onSelectSearch: (id: string) => void;
   onSelectApplication: (id: string) => void;
   onOverview: () => void;
+  onAgenda: () => void;
   onNewSearch: () => void;
   onRenameSearch: (id: string) => void;
   onDeleteSearch: (id: string) => void;
@@ -78,6 +80,16 @@ export function Sidebar({
         >
           <Icon name="grid" className={cn("h-4 w-4", view.type === "overview" ? "text-brand" : "text-faint")} />
           Resumen general
+        </button>
+        <button
+          onClick={onAgenda}
+          className={cn(
+            "mb-4 flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors",
+            view.type === "agenda" ? "bg-elev2 text-ink" : "text-muted hover:bg-white/5 hover:text-ink",
+          )}
+        >
+          <Icon name="calendar" className={cn("h-4 w-4", view.type === "agenda" ? "text-brand" : "text-faint")} />
+          Agenda de vencimientos
         </button>
 
         <p className="mb-1.5 flex items-center justify-between px-2.5 text-[10.5px] font-semibold tracking-[0.16em] text-faint uppercase">
