@@ -8,7 +8,7 @@ import { ApplicationModal, ConfirmModal, CVModal, MoveModal, SearchModal, Toast 
 import { LoginModal } from "./components/LoginModal";
 import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
-import { supabase } from "./lib/supabaseClient";
+import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
 type ModalState =
@@ -35,10 +35,14 @@ export default function App() {
   const notify = useCallback((message: string) => setToast(message), []);
 
   // Sync React state with the Supabase auth session (keeps email-string shape).
+  // Resolve OAuth redirect sessions, then clean the URL hash for a tidy UI.
   useEffect(() => {
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user?.email ?? null);
+      if (window.location.hash.includes("access_token")) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user?.email ?? null);
@@ -64,6 +68,49 @@ export default function App() {
     },
     [notify],
   );
+
+  const handleRegister = useCallback(
+    async (email: string, password: string): Promise<"confirmed" | "check-email"> => {
+      if (!supabase) {
+        // Prototype fallback: no backend configured, accept anything.
+        setUser(email);
+        closeModal();
+        notify("Cuenta creada (prototipo)");
+        return "confirmed";
+      }
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+      if (data.session) {
+        closeModal();
+        notify("Cuenta creada");
+        return "confirmed";
+      }
+      return "check-email";
+    },
+    [notify],
+  );
+
+  const handleRecovery = useCallback(
+    async (email: string) => {
+      if (!supabase) {
+        notify("Prototipo sin backend: no se envió ningún correo");
+        return;
+      }
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+    },
+    [notify],
+  );
+
+  const handleGoogle = useCallback(async () => {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) throw error;
+    // Success path redirects away; session resolves via getSession + onAuthStateChange.
+  }, []);
 
   const handleSignOut = useCallback(async () => {
     if (supabase) {
@@ -229,6 +276,10 @@ export default function App() {
 
   /* ------------------------------------------------------------------- view */
 
+  // Real backend without session: overview stays visible, inner views are gated.
+  const locked = isSupabaseConfigured && !user;
+  const openLogin = () => setModal({ type: "login" });
+
   const sidebar = (
     <Sidebar
       searches={searches}
@@ -336,17 +387,43 @@ export default function App() {
           <div className="pointer-events-none fixed inset-x-0 top-0 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(59,130,246,0.07),transparent_70%)]" />
 
           {view.type === "overview" && (
-            <Overview
-              searches={searches}
-              applications={apps}
-              onOpenSearch={openSearch}
-              onOpenApplication={openApp}
-              onNewSearch={() => setModal({ type: "search" })}
-              onNewApplication={() => setModal({ type: "application", searchId: searches[0]?.id })}
-            />
+            <>
+              {locked && (
+                <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand/30 bg-brand/10 px-4 py-3 text-[13px] text-ink sm:mx-5">
+                  <span>Inicia sesión para gestionar tus búsquedas y postulaciones.</span>
+                  <Button variant="primary" size="sm" onClick={openLogin}>
+                    Iniciar sesión
+                  </Button>
+                </div>
+              )}
+              <Overview
+                searches={searches}
+                applications={apps}
+                onOpenSearch={openSearch}
+                onOpenApplication={openApp}
+                onNewSearch={() => setModal({ type: "search" })}
+                onNewApplication={() => setModal({ type: "application", searchId: searches[0]?.id })}
+              />
+            </>
           )}
 
-          {view.type === "dashboard" &&
+          {locked && view.type !== "overview" && (
+            <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+              <div className="max-w-sm rounded-xl border border-line2 bg-surface/60 px-8 py-10">
+                <p className="text-[15px] font-semibold text-ink">Contenido protegido</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-muted">
+                  Inicia sesión para ver tus búsquedas y postulaciones.
+                </p>
+                <div className="mt-5">
+                  <Button variant="primary" size="sm" onClick={openLogin}>
+                    Iniciar sesión
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!locked && view.type === "dashboard" &&
             (currentSearch ? (
               <SearchDashboard
                 search={currentSearch}
@@ -368,7 +445,7 @@ export default function App() {
               <div className="p-10 text-center text-muted">Esta búsqueda ya no existe.</div>
             ))}
 
-          {view.type === "application" &&
+          {!locked && view.type === "application" &&
             (currentApp && searches.find((s) => s.id === currentApp.searchId) ? (
               <ApplicationView
                 app={currentApp}
@@ -463,6 +540,9 @@ export default function App() {
         open={modal.type === "login"}
         onClose={closeModal}
         onLogin={handleLogin}
+        onRegister={handleRegister}
+        onRecovery={handleRecovery}
+        onGoogle={handleGoogle}
       />
 
       {/* footer hint */}
