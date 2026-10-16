@@ -22,13 +22,18 @@ export function useEvidenceUrls(images: string[]): { urls: Map<string, string>; 
     }
     let cancelled = false;
     setLoading(true);
-    Promise.all(stored.map(async (path) => [path, await getEvidenceUrl(path)] as const))
+    Promise.all(
+      stored.map(async (path) => {
+        try {
+          return [path, await getEvidenceUrl(path)] as const;
+        } catch (err) {
+          console.error(`[storage] getEvidenceUrl failed for ${path}`, err);
+          return null;
+        }
+      }),
+    )
       .then((entries) => {
-        if (!cancelled) setUrls(new Map(entries));
-      })
-      .catch((err) => {
-        console.error("[storage] getEvidenceUrl failed", err);
-        if (!cancelled) setUrls(new Map());
+        if (!cancelled) setUrls(new Map(entries.filter((entry): entry is readonly [string, string] => entry !== null)));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Overview } from "./components/Overview";
 import { SearchDashboard } from "./components/SearchDashboard";
@@ -46,6 +46,9 @@ export default function App() {
   const [importingSeeds, setImportingSeeds] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [exportingApplicationId, setExportingApplicationId] = useState<string | null>(null);
+  const evidenceUploadsInProgress = useRef(new Set<string>());
+  const appsRef = useRef(apps);
+  appsRef.current = apps;
 
   const closeModal = useCallback(() => setModal({ type: null }), []);
   const closeGlobalSearch = useCallback(() => setGlobalSearchOpen(false), []);
@@ -343,7 +346,7 @@ export default function App() {
 
   // Optimistic update keeps the UI snappy; reconcile with the DB row when persisted.
   const patchApp = (id: string, patch: Partial<Application>) => {
-    const prev = apps.find((a) => a.id === id);
+    const prev = appsRef.current.find((a) => a.id === id);
     const next = prev
       ? recordApplicationChanges(prev, { ...prev, ...patch, updatedAt: todayISO() })
       : undefined;
@@ -377,9 +380,18 @@ export default function App() {
 
   // Uploads staged evidence files into the application folder and returns
   // the storage paths. Per-file failures notify inline and skip that file.
-  const uploadStagedEvidence = async (userId: string, appId: string, files: File[]): Promise<string[]> => {
+  const uploadStagedEvidence = async (
+    userId: string,
+    appId: string,
+    files: File[],
+    existingImageCount = 0,
+  ): Promise<string[]> => {
     const paths: string[] = [];
-    for (const file of files) {
+    const allowedFiles = files.slice(0, Math.max(0, MAX_EVIDENCE_IMAGES - existingImageCount));
+    if (allowedFiles.length < files.length) {
+      notify(`Solo se permiten ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
+    }
+    for (const file of allowedFiles) {
       try {
         paths.push(await uploadEvidence(userId, appId, file));
       } catch (err) {
@@ -390,10 +402,11 @@ export default function App() {
     return paths;
   };
 
-  const addApplicationEvidence = async (application: Application, files: File[]) => {
-    const remaining = MAX_EVIDENCE_IMAGES - (application.images?.length ?? 0);
+  const processApplicationEvidence = async (application: Application, files: File[]) => {
+    const currentImages = appsRef.current.find((app) => app.id === application.id)?.images ?? application.images ?? [];
+    const remaining = MAX_EVIDENCE_IMAGES - currentImages.length;
     if (remaining <= 0) {
-      notify(`Puedes adjuntar hasta ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
+      notify(`Esta postulación ya tiene ${currentImages.length} imágenes. El máximo es ${MAX_EVIDENCE_IMAGES}.`);
       return;
     }
     const selected = files.slice(0, remaining);
@@ -421,6 +434,7 @@ export default function App() {
       return;
     }
 
+    let addedCount = 0;
     if (isSupabaseConfigured && supabase) {
       const uploaded: string[] = [];
       try {
@@ -440,10 +454,22 @@ export default function App() {
         console.error("[evidence] upload failed", error);
         rejected.push(error instanceof Error ? error.message : "No se pudieron subir las imágenes");
       }
-      if (uploaded.length > 0) patchApp(application.id, { images: [...(application.images ?? []), ...uploaded] });
+      if (uploaded.length > 0) {
+        const latestImages = appsRef.current.find((app) => app.id === application.id)?.images ?? currentImages;
+        const accepted = uploaded.slice(0, Math.max(0, MAX_EVIDENCE_IMAGES - latestImages.length));
+        const excess = uploaded.slice(accepted.length);
+        if (excess.length > 0) {
+          deleteEvidence(excess).catch((error) => console.error("[storage] deleteEvidence failed", error));
+        }
+        addedCount = accepted.length;
+        if (accepted.length > 0) patchApp(application.id, { images: [...latestImages, ...accepted] });
+        if (accepted.length < uploaded.length) {
+          rejected.push(`Solo se permiten ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
+        }
+      }
       if (uploaded.length > 0 || rejected.length > 0) {
         notify([
-          uploaded.length > 0 ? `Se agregaron ${uploaded.length} imagen(es)` : "",
+          addedCount > 0 ? `Se agregaron ${addedCount} imagen(es)` : "",
           rejected.length > 0 ? `Algunos archivos no se agregaron: ${rejected.join(". ")}` : "",
         ].filter(Boolean).join(". "));
       }
@@ -465,13 +491,29 @@ export default function App() {
       }
     }
     if (dataUrls.length > 0) {
-      patchApp(application.id, { images: [...(application.images ?? []), ...dataUrls] });
+      const latestImages = appsRef.current.find((app) => app.id === application.id)?.images ?? currentImages;
+      const accepted = dataUrls.slice(0, Math.max(0, MAX_EVIDENCE_IMAGES - latestImages.length));
+      addedCount = accepted.length;
+      if (accepted.length > 0) patchApp(application.id, { images: [...latestImages, ...accepted] });
+      if (accepted.length < dataUrls.length) {
+        rejected.push(`Solo se permiten ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
+      }
     }
     if (dataUrls.length > 0 || rejected.length > 0) {
       notify([
-        dataUrls.length > 0 ? `Se agregaron ${dataUrls.length} imagen(es)` : "",
+        addedCount > 0 ? `Se agregaron ${addedCount} imagen(es)` : "",
         rejected.length > 0 ? `Algunos archivos no se agregaron: ${rejected.join(". ")}` : "",
       ].filter(Boolean).join(". "));
+    }
+  };
+
+  const addApplicationEvidence = async (application: Application, files: File[]) => {
+    if (evidenceUploadsInProgress.current.has(application.id)) return;
+    evidenceUploadsInProgress.current.add(application.id);
+    try {
+      await processApplicationEvidence(application, files);
+    } finally {
+      evidenceUploadsInProgress.current.delete(application.id);
     }
   };
 
@@ -497,7 +539,10 @@ export default function App() {
           const { data: session } = await supabase.auth.getUser();
           const userId = session.user?.id;
           if (!userId) throw new Error("No active session.");
-          images = [...images, ...(await uploadStagedEvidence(userId, id, newImageFiles))];
+          images = [
+            ...images,
+            ...(await uploadStagedEvidence(userId, id, newImageFiles, images.length)),
+          ];
         }
         const next = recordApplicationChanges(previous, { ...previous, ...rest, images, updatedAt: todayISO() });
         const existingEvents = previous.activity?.length ?? 0;
@@ -540,7 +585,7 @@ export default function App() {
         const { data: session } = await supabase.auth.getUser();
         const userId = session.user?.id;
         if (!userId) throw new Error("No active session.");
-        const paths = await uploadStagedEvidence(userId, app.id, newImageFiles);
+        const paths = await uploadStagedEvidence(userId, app.id, newImageFiles, app.images.length);
         if (paths.length > 0) {
           finalApp = await db.patchApplication(app.id, { images: [...app.images, ...paths] });
         }
@@ -568,7 +613,7 @@ export default function App() {
         id: uid("a"),
         company: `${source.company} (copia)`,
         points: source.points.map((p) => ({ ...p, id: uid("p") })),
-        images: [...(source.images ?? [])],
+        images: [...(source.images ?? []).slice(0, MAX_EVIDENCE_IMAGES)],
         createdAt: todayISO(),
         updatedAt: todayISO(),
       };

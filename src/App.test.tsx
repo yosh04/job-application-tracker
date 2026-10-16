@@ -99,6 +99,24 @@ describe("application management workflow", () => {
     expect(await screen.findByText("Se agregaron 1 imagen(es)")).toBeTruthy();
   });
 
+  it("never lets a postulación store more than four evidence images", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Programador Frontend" }));
+    await user.click(screen.getByRole("button", { name: "Ver Microsoft" }));
+
+    const files = Array.from({ length: 5 }, (_, index) =>
+      new File([`image-${index}`], `captura-${index}.jpg`, { type: "image/jpeg" }),
+    );
+    await user.upload(screen.getByLabelText("Seleccionar imágenes de evidencia"), files);
+
+    expect(await screen.findByRole("button", { name: "Ver evidencia 4" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Ver evidencia 5" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Agregar imágenes/ })).toBeNull();
+    expect(await screen.findByText(/Solo se pueden adjuntar 4/)).toBeTruthy();
+  });
+
   it("appends each status change to the application activity timeline", async () => {
     const user = userEvent.setup();
     render(<App />);

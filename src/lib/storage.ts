@@ -186,7 +186,7 @@ export async function uploadEvidence(
     throw new Error("Session user does not match the target upload folder.");
   }
   validateEvidenceFile(file);
-  const path = `${userId}/${applicationId}/evidence-${Date.now()}-${sanitizeFileName(file.name)}`;
+  const path = `${userId}/${applicationId}/evidence-${Date.now()}-${crypto.randomUUID()}-${sanitizeFileName(file.name)}`;
   const { error } = await client.storage.from(EVIDENCE_BUCKET).upload(path, file, { upsert: true });
   if (error) throw error;
   return path;

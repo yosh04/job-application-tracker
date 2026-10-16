@@ -165,7 +165,7 @@ export function ApplicationModal({
       notes: editing?.notes ?? "",
     });
     setPoints(editing?.points ? editing.points.map((p) => ({ ...p })) : []);
-    setImages(editing?.images ? [...editing.images].slice(0, MAX_EVIDENCE_IMAGES) : []);
+    setImages(editing?.images ? [...editing.images] : []);
     setPending((prev) => {
       revokePending(prev);
       return [];
@@ -308,7 +308,7 @@ export function ApplicationModal({
       deadline: form.deadline.trim() ? form.deadline.trim() : undefined,
       points,
       cv,
-      images: images.slice(0, MAX_EVIDENCE_IMAGES),
+      images,
       ...(pending.length > 0 ? { newImageFiles: pending.map((p) => p.file) } : {}),
     });
   };

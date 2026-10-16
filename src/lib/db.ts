@@ -1,7 +1,7 @@
 import { supabase } from "./supabaseClient";
 import { copyEvidenceToApplication, isStorageEvidencePath } from "./storage";
 import { initialApplicationActivity } from "./applicationActivity";
-import type { Application, ApplicationActivity, CVFile, InterestPoint, Search, Status } from "../types";
+import { MAX_EVIDENCE_IMAGES, type Application, type ApplicationActivity, type CVFile, type InterestPoint, type Search, type Status } from "../types";
 
 // Supabase persistence layer for the user's workspace.
 //
@@ -380,8 +380,9 @@ export async function duplicateApplication(source: Application): Promise<Applica
   // other. A failed copy falls back to the shared source path so no image
   // is silently lost.
   const userId = await requireUserId();
-  const legacy = (source.images ?? []).filter((v) => !isStorageEvidencePath(v));
-  const stored = (source.images ?? []).filter(isStorageEvidencePath);
+  const sourceImages = (source.images ?? []).slice(0, MAX_EVIDENCE_IMAGES);
+  const legacy = sourceImages.filter((v) => !isStorageEvidencePath(v));
+  const stored = sourceImages.filter(isStorageEvidencePath);
   const created = await createApplication({
     searchId: source.searchId,
     company: `${source.company} (copia)`,
