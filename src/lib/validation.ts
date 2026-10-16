@@ -1,4 +1,5 @@
 export const CV_MAX_BYTES = 5 * 1024 * 1024;
+export const EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
 const CV_TYPES: Record<string, string[]> = {
   pdf: ["application/pdf"],
   doc: ["application/msword"],

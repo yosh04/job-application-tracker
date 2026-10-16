@@ -11,8 +11,9 @@ import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
 import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 import * as db from "./lib/db";
-import { deleteCv, deleteEvidence, EVIDENCE_MAX_BYTES, isStorageEvidencePath, uploadEvidence } from "./lib/storage";
+import { deleteCv, deleteEvidence, isStorageEvidencePath, uploadEvidence } from "./lib/storage";
 import { applicationArchiveFilename, buildApplicationArchive } from "./lib/applicationExport";
+import { compressEvidenceImage } from "./lib/evidenceImage";
 import { initialApplicationActivity, mergeActivityEntries, recordApplicationChanges } from "./lib/applicationActivity";
 import { importSeeds } from "./lib/seedMigrate";
 import { todayISO, uid, MAX_EVIDENCE_IMAGES, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
@@ -402,10 +403,14 @@ export default function App() {
       const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
       if (!["png", "jpg", "jpeg", "webp", "gif"].includes(extension) || (file.type && !file.type.startsWith("image/"))) {
         rejected.push(`${file.name}: formato no permitido`);
-      } else if (!file.size || file.size > EVIDENCE_MAX_BYTES) {
-        rejected.push(`${file.name}: el tamaño debe ser de hasta 5 MB`);
+      } else if (!file.size) {
+        rejected.push(`${file.name}: el archivo está vacío`);
       } else {
-        valid.push(file);
+        try {
+          valid.push(await compressEvidenceImage(file));
+        } catch (error) {
+          rejected.push(`${file.name}: ${error instanceof Error ? error.message : "no se pudo optimizar"}`);
+        }
       }
     }
     if (files.length > selected.length) {

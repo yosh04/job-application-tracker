@@ -114,6 +114,8 @@ navigation and focus trapping, and the create/duplicate/edit/move/delete flow.
   URLs (1h, see `src/lib/storage.ts`), never public URLs.
 - 5 MB size limit and the CV/image allowlist are enforced by the bucket and
   mirrored client-side for early feedback.
+- Evidence images are resized and converted to WebP in the browser before
+  upload or local storage. The 5 MB limit applies to the optimized output.
 
 ## Migration 0003 — application activity history
 

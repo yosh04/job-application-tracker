@@ -4,6 +4,7 @@ import { Button, Icon, Input, Label, Modal, Select, Textarea } from "./ui";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { deleteCv, downloadCv, formatFileSize, getCvUrl, uploadCv } from "../lib/storage";
 import { isStorageEvidencePath, uploadEvidence } from "../lib/storage";
+import { compressEvidenceImage } from "../lib/evidenceImage";
 import { isValidISODate, isValidOfferUrl, validateCvFile } from "../lib/validation";
 import { prefixCvFilename } from "../lib/fileNames";
 import { toDisplayUrl, useEvidenceUrls } from "../lib/useEvidenceUrls";
@@ -212,53 +213,76 @@ export function ApplicationModal({
     if (files.length > remaining) setImgWarning(`Máximo ${MAX_EVIDENCE_IMAGES} imágenes por postulación`);
     else setImgWarning(null);
 
-    // Prototype fallback: keep data-URL behavior, no real upload.
-    if (!backend || !supabase) {
-      selected.forEach((file) => {
-        if (file.size > 2 * 1024 * 1024)
-          setImgWarning("Archivo grande (>2 MB): se guarda solo en este prototipo y puede ralentizar la app");
-        const reader = new FileReader();
-        reader.onload = () => {
-          const url = typeof reader.result === "string" ? reader.result : null;
-          if (!url) return;
-          setImages((prev) =>
-            prev.length + pending.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, url],
-          );
-        };
-        reader.readAsDataURL(file);
-      });
-      return;
-    }
-
-    // New application: stage files locally, upload after create.
-    if (!editing) {
-      setPending((prev) => {
-        const room = MAX_EVIDENCE_IMAGES - images.length - prev.length;
-        const staged = selected.slice(0, Math.max(room, 0)).map((file, i) => ({
-          id: `pending_${crypto.randomUUID()}_${i}`,
-          file,
-          preview: URL.createObjectURL(file),
-        }));
-        return [...prev, ...staged];
-      });
-      return;
-    }
-
-    // Editing: upload on select into the existing application folder.
     setImgUploading(true);
-    setImgWarning(null);
     try {
-      const { data } = await supabase.auth.getUser();
+      const optimized: File[] = [];
+      const failures: string[] = [];
+      for (const file of selected) {
+        const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+        if (!["png", "jpg", "jpeg", "webp", "gif"].includes(extension) || (file.type && !file.type.startsWith("image/"))) {
+          failures.push(`${file.name}: formato no permitido`);
+          continue;
+        }
+        try {
+          optimized.push(await compressEvidenceImage(file));
+        } catch (error) {
+          failures.push(`${file.name}: ${error instanceof Error ? error.message : "no se pudo optimizar"}`);
+        }
+      }
+
+      if (optimized.length === 0) {
+        setImgWarning(failures.length > 0 ? failures.join(". ") : "No se pudo optimizar ninguna imagen.");
+        return;
+      }
+
+      if (!backend || !supabase) {
+        for (const file of optimized) {
+          try {
+            const url = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("No se pudo leer el archivo."));
+              reader.onerror = () => reject(reader.error ?? new Error("No se pudo leer el archivo."));
+              reader.readAsDataURL(file);
+            });
+            setImages((prev) =>
+              prev.length + pending.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, url],
+            );
+          } catch (error) {
+            failures.push(`${file.name}: ${error instanceof Error ? error.message : "no se pudo leer"}`);
+          }
+        }
+        setImgWarning(failures.length > 0 ? failures.join(". ") : null);
+        return;
+      }
+
+      if (!editing) {
+        setPending((prev) => {
+          const room = MAX_EVIDENCE_IMAGES - images.length - prev.length;
+          const staged = optimized.slice(0, Math.max(room, 0)).map((file, i) => ({
+            id: `pending_${crypto.randomUUID()}_${i}`,
+            file,
+            preview: URL.createObjectURL(file),
+          }));
+          return [...prev, ...staged];
+        });
+        setImgWarning(failures.length > 0 ? failures.join(". ") : null);
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getUser();
+      if (error) throw error;
       const userId = data.user?.id;
       if (!userId) throw new Error("No active session.");
-      for (const file of selected) {
+      for (const file of optimized) {
         try {
           const path = await uploadEvidence(userId, editing.id, file);
           setImages((prev) => (prev.length >= MAX_EVIDENCE_IMAGES ? prev : [...prev, path]));
         } catch (err) {
-          setImgWarning(err instanceof Error ? err.message : "Image upload failed.");
+          failures.push(`${file.name}: ${err instanceof Error ? err.message : "Image upload failed."}`);
         }
       }
+      setImgWarning(failures.length > 0 ? failures.join(". ") : null);
     } catch (err) {
       setImgWarning(err instanceof Error ? err.message : "Image upload failed.");
     } finally {
@@ -520,7 +544,9 @@ export function ApplicationModal({
                   ? "Subiendo imágenes…"
                   : "Agrega capturas de la oferta"}
             </p>
-            <p className="mt-0.5 font-mono text-[10.5px] text-faint">PNG · JPG · máx {MAX_EVIDENCE_IMAGES}</p>
+            <p className="mt-0.5 font-mono text-[10.5px] text-faint">
+              PNG · JPG · optimización automática · máx. {MAX_EVIDENCE_IMAGES}
+            </p>
             <input
               type="file"
               accept="image/*"

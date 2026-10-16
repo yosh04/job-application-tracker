@@ -597,7 +597,7 @@ export function ApplicationView({
                 <span className="text-[12.5px] font-medium text-ink">
                   {addingEvidence ? "Agregando imágenes…" : "Haz clic o arrastra imágenes aquí"}
                 </span>
-                <span className="mt-1 text-[11.5px] text-faint">PNG, JPG, WEBP o GIF · hasta 5 MB por imagen</span>
+                <span className="mt-1 text-[11.5px] text-faint">PNG, JPG, WEBP o GIF · optimización automática · máx. 5 MB</span>
               </button>
             )}
             <input

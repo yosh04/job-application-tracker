@@ -1,7 +1,7 @@
 import { supabase } from "./supabaseClient";
 import { todayISO } from "../types";
-import { validateCvFile as getCvFileValidationError } from "./validation";
-export { CV_MAX_BYTES } from "./validation";
+import { EVIDENCE_MAX_BYTES, validateCvFile as getCvFileValidationError } from "./validation";
+export { CV_MAX_BYTES, EVIDENCE_MAX_BYTES } from "./validation";
 
 // Supabase Storage helpers (Fase 3: CV in slice 1, evidence images in slice 2).
 //
@@ -140,9 +140,6 @@ export async function deleteCv(paths: string[]): Promise<void> {
 /* ------------------------------------------------------- evidence images */
 
 export const EVIDENCE_BUCKET = CV_BUCKET;
-
-/** 5 MB max per evidence image (mirrors the CV limit; keeps duplicates cheap). */
-export const EVIDENCE_MAX_BYTES = 5 * 1024 * 1024;
 
 const EVIDENCE_ALLOWED_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif"];
 
