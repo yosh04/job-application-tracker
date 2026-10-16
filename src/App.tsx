@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "./utils/cn";
 import { Sidebar } from "./components/Sidebar";
 import { Overview } from "./components/Overview";
@@ -8,6 +8,7 @@ import { ApplicationModal, ConfirmModal, CVModal, MoveModal, SearchModal, Toast 
 import { LoginModal } from "./components/LoginModal";
 import { Button, Icon } from "./components/ui";
 import { SEED_APPLICATIONS, SEED_SEARCHES } from "./seed";
+import { supabase } from "./lib/supabaseClient";
 import { todayISO, uid, type Application, type InterestPoint, type Search, type Status, type View } from "./types";
 
 type ModalState =
@@ -32,6 +33,45 @@ export default function App() {
 
   const closeModal = () => setModal({ type: null });
   const notify = useCallback((message: string) => setToast(message), []);
+
+  // Sync React state with the Supabase auth session (keeps email-string shape).
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user?.email ?? null);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user?.email ?? null);
+    });
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogin = useCallback(
+    async (email: string, password: string) => {
+      if (!supabase) {
+        // Prototype fallback: no backend configured, accept anything.
+        setUser(email);
+        closeModal();
+        notify("Sesión iniciada (prototipo)");
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      closeModal();
+      notify("Sesión iniciada");
+    },
+    [notify],
+  );
+
+  const handleSignOut = useCallback(async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setUser(null);
+    notify("Sesión cerrada");
+  }, [notify]);
 
   const currentSearch = "searchId" in view ? searches.find((s) => s.id === view.searchId) : undefined;
   const currentApp = view.type === "application" ? apps.find((a) => a.id === view.id) : undefined;
@@ -268,17 +308,6 @@ export default function App() {
               </span>
             </div>
 
-            <Button
-              variant="subtle"
-              size="sm"
-              className="hidden sm:inline-flex"
-              onClick={() =>
-                setModal({ type: "application", searchId: "searchId" in view ? view.searchId : searches[0]?.id })
-              }
-            >
-              <Icon name="plus" strokeWidth={2} /> Postulación
-            </Button>
-
             {user ? (
               <div className="flex items-center gap-2">
                 <div
@@ -288,11 +317,7 @@ export default function App() {
                   {user.slice(0, 1).toUpperCase()}
                 </div>
                 <button
-                  onClick={() => {
-                    // TODO(supabase): replace with supabase.auth.signOut()
-                    setUser(null);
-                    notify("Sesión cerrada");
-                  }}
+                  onClick={handleSignOut}
                   className="text-[12px] text-muted transition-colors hover:text-ink"
                 >
                   Salir
@@ -437,12 +462,7 @@ export default function App() {
       <LoginModal
         open={modal.type === "login"}
         onClose={closeModal}
-        onLogin={(email) => {
-          // TODO(supabase): replace with supabase.auth.signInWithPassword
-          setUser(email);
-          closeModal();
-          notify("Sesión iniciada (prototipo)");
-        }}
+        onLogin={handleLogin}
       />
 
       {/* footer hint */}

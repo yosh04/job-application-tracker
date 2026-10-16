@@ -127,6 +127,7 @@ export function ApplicationModal({
   const [cv, setCv] = useState<Application["cv"]>(null);
   const [images, setImages] = useState<string[]>([]);
   const [imgWarning, setImgWarning] = useState<string | null>(null);
+  const [pendingImg, setPendingImg] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -188,23 +189,24 @@ export function ApplicationModal({
   };
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      width="max-w-xl"
-      title={editing ? "Editar postulación" : "Nueva postulación"}
-      subtitle="Toda la información relevante de esta oportunidad concreta."
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button variant="primary" size="sm" disabled={!valid} onClick={submit}>
-            {editing ? "Guardar cambios" : "Guardar postulación"}
-          </Button>
-        </>
-      }
-    >
+    <>
+      <Modal
+        open={open}
+        onClose={onClose}
+        width="max-w-xl"
+        title={editing ? "Editar postulación" : "Nueva postulación"}
+        subtitle="Toda la información relevante de esta oportunidad concreta."
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button variant="primary" size="sm" disabled={!valid} onClick={submit}>
+              {editing ? "Guardar cambios" : "Guardar postulación"}
+            </Button>
+          </>
+        }
+      >
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -362,10 +364,7 @@ export function ApplicationModal({
                 <div key={i} className="group relative overflow-hidden rounded-md border border-line">
                   <img src={src} alt={`Evidencia ${i + 1}`} className="h-20 w-full object-cover" />
                   <button
-                    onClick={() => {
-                      setImages(images.filter((_, j) => j !== i));
-                      setImgWarning(null);
-                    }}
+                    onClick={() => setPendingImg(i)}
                     className="absolute top-1 right-1 rounded-full bg-black/70 p-1 text-white transition-opacity hover:bg-red-500/90"
                     aria-label={`Quitar imagen ${i + 1}`}
                   >
@@ -411,7 +410,20 @@ export function ApplicationModal({
           />
         </div>
       </div>
-    </Modal>
+      </Modal>
+      <ConfirmModal
+        open={pendingImg !== null}
+        onClose={() => setPendingImg(null)}
+        onConfirm={() => {
+          if (pendingImg !== null) setImages((prev) => prev.filter((_, j) => j !== pendingImg));
+          setImgWarning(null);
+          setPendingImg(null);
+        }}
+        title="Eliminar imagen"
+        message="Se eliminará esta captura de la postulación. Esta acción no se puede deshacer."
+        confirmLabel="Eliminar"
+      />
+    </>
   );
 }
 

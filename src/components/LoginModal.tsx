@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Label, Modal } from "./ui";
+import { isSupabaseConfigured } from "../lib/supabaseClient";
 
 export function LoginModal({
   open,
@@ -8,24 +9,35 @@ export function LoginModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onLogin: (email: string) => void;
+  onLogin: (email: string, password: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setEmail("");
       setPassword("");
+      setError(null);
+      setPending(false);
     }
   }, [open]);
 
-  const valid = email.trim().length > 3 && email.includes("@") && password.length > 0;
+  const valid = email.trim().length > 3 && email.includes("@") && password.length > 0 && !pending;
 
-  const submit = () => {
+  const submit = async () => {
     if (!valid) return;
-    // TODO(supabase): replace with supabase.auth.signInWithPassword({ email, password })
-    onLogin(email.trim());
+    setPending(true);
+    setError(null);
+    try {
+      await onLogin(email.trim(), password);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo iniciar sesión.");
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -34,14 +46,18 @@ export function LoginModal({
       onClose={onClose}
       width="max-w-md"
       title="Iniciar sesión"
-      subtitle="Prototipo local: no se valida contra ningún servidor."
+      subtitle={
+        isSupabaseConfigured
+          ? "Ingresa con tu cuenta de JobTrack."
+          : "Prototipo local: no se valida contra ningún servidor."
+      }
       footer={
         <>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={pending}>
             Cancelar
           </Button>
           <Button variant="primary" size="sm" disabled={!valid} onClick={submit}>
-            Iniciar sesión
+            {pending ? "Ingresando…" : "Iniciar sesión"}
           </Button>
         </>
       }
@@ -54,8 +70,9 @@ export function LoginModal({
             type="email"
             placeholder="tu@correo.com"
             value={email}
+            disabled={pending}
             onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && valid && submit()}
+            onKeyDown={(e) => e.key === "Enter" && valid && void submit()}
           />
         </div>
         <div>
@@ -64,14 +81,17 @@ export function LoginModal({
             type="password"
             placeholder="••••••••"
             value={password}
+            disabled={pending}
             onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && valid && submit()}
+            onKeyDown={(e) => e.key === "Enter" && valid && void submit()}
           />
         </div>
-        <p className="text-[11.5px] leading-relaxed text-faint">
-          Prototipo sin backend: cualquier correo y contraseña funcionan. Con Supabase, este formulario usará{" "}
-          <span className="font-mono text-muted">supabase.auth.signInWithPassword</span>.
-        </p>
+        {error && <p className="text-[12px] leading-relaxed text-red-400">{error}</p>}
+        {!isSupabaseConfigured && (
+          <p className="text-[11.5px] leading-relaxed text-faint">
+            Prototipo sin backend: cualquier correo y contraseña funcionan.
+          </p>
+        )}
       </div>
     </Modal>
   );

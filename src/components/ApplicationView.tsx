@@ -15,6 +15,7 @@ import {
   StatusDot,
 } from "./ui";
 import { longDate, shortDate, STATUSES, todayISO, type Application, type InterestPoint, type Search, type Status } from "../types";
+import { ConfirmModal } from "./Modals";
 
 function InfoRow({ label, value, mono, icon }: { label: string; value?: string; mono?: boolean; icon?: string }) {
   return (
@@ -128,6 +129,7 @@ export function ApplicationView({
   const [notes, setNotes] = useState(app.notes);
   const [notesDirty, setNotesDirty] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<number | null>(null);
   const images = app.images ?? [];
 
   return (
@@ -477,7 +479,7 @@ export function ApplicationView({
                       />
                     </button>
                     <button
-                      onClick={() => onPatch({ images: images.filter((_, j) => j !== i) })}
+                      onClick={() => setPendingImage(i)}
                       className="absolute top-1.5 right-1.5 rounded-full bg-black/70 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500/90"
                       aria-label={`Quitar imagen ${i + 1}`}
                     >
@@ -514,6 +516,17 @@ export function ApplicationView({
                 </a>
               </div>
             )}
+            <ConfirmModal
+              open={pendingImage !== null}
+              onClose={() => setPendingImage(null)}
+              onConfirm={() => {
+                if (pendingImage !== null) onPatch({ images: images.filter((_, j) => j !== pendingImage) });
+                setPendingImage(null);
+              }}
+              title="Eliminar imagen"
+              message="Se eliminará esta captura de la postulación. Esta acción no se puede deshacer."
+              confirmLabel="Eliminar"
+            />
           </section>
 
           <section>

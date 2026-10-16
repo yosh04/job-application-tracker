@@ -103,10 +103,6 @@ export function SearchDashboard({
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onRenameSearch}>
-            <Icon name="pencil" />
-            Editar objetivo
-          </Button>
           <Dropdown
             trigger={(open) => (
               <IconButton label="Más opciones" className={cn(open && "bg-white/8 text-ink")}>
@@ -117,22 +113,13 @@ export function SearchDashboard({
             {(close) => (
               <>
                 <MenuItem
-                  icon="plus"
-                  onClick={() => {
-                    close();
-                    onNewApplication();
-                  }}
-                >
-                  Nueva postulación
-                </MenuItem>
-                <MenuItem
-                  icon="external"
+                  icon="pencil"
                   onClick={() => {
                     close();
                     onRenameSearch();
                   }}
                 >
-                  Renombrar búsqueda
+                  Editar búsqueda
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem
