@@ -1,7 +1,7 @@
 # Tareas del proyecto — JobTrack (del prototipo a producción)
 
 Hoja de ruta para llevar este prototipo a una aplicación en producción.
-Estado actual: prototipo local (React + Vite + Tailwind, estado en memoria con `useState` + seed, sin backend, sin persistencia; al recargar se pierden los cambios).
+Estado actual: rama `develop` con auth real, persistencia en Supabase y Storage privado (Fases 1–3 en código; pendientes verificaciones físicas: provider Google, mimes de imágenes y smoke tests).
 
 ## Fase 0 — Base lista (prototipo actual)
 
@@ -18,29 +18,30 @@ Estado actual: prototipo local (React + Vite + Tailwind, estado en memoria con `
 
 ## Fase 1 — Autenticación con Supabase
 
-- [ ] Instalar `@supabase/supabase-js`
-- [ ] Activar `src/lib/supabaseClient.ts` (hoy exporta `null`) con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`
-- [ ] Reemplazar login simulado por `supabase.auth.signInWithPassword`
-- [ ] Agregar registro, recuperación de contraseña y cierre de sesión real
-- [ ] Mantener sesión persistente y exponer `user` en `App.tsx` (hoy `useState<string | null>`)
-- [ ] Proteger vistas: si no hay `user`, mostrar solo login/overview limitado
-- [ ] Definir variables `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` en `.env` local (fuera de git)
+- [x] Instalar `@supabase/supabase-js`
+- [x] Activar `src/lib/supabaseClient.ts` (hoy exporta `null`) con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`
+- [x] Reemplazar login simulado por `supabase.auth.signInWithPassword`
+- [x] Agregar registro, recuperación de contraseña y cierre de sesión real
+- [x] Mantener sesión persistente y exponer `user` en `App.tsx` (hoy `useState<string | null>`)
+- [x] Proteger vistas: si no hay `user`, mostrar solo login/overview limitado
+- [x] Definir variables `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` en `.env` local (fuera de git)
+- [x] Extra: login con Google OAuth 2.0 (`signInWithOAuth`; pendiente activar provider en Dashboard)
 
 ## Fase 2 — Persistencia en base de datos
 
-- [ ] Diseñar schema en Postgres (Supabase): `searches`, `applications` (FK a `searches` con cascade + `check` de estado), `interest_points` (FK a `applications`)
-- [ ] Definir políticas RLS por `user_id` / propietario en las tres tablas
-- [ ] Reemplazar `useState` + seed por consultas a Supabase (lectura/escritura por usuario)
-- [ ] Reemplazar `uid()` (`Math.random`) por `uuid` generado en base de datos
-- [ ] Migrar datos semilla con fechas ISO (`todayISO()` / `YYYY-MM-DD`) y validar estados y fechas
+- [x] Diseñar schema en Postgres (Supabase): `searches`, `applications` (FK a `searches` con cascade + `check` de estado), `interest_points` (FK a `applications`)
+- [x] Definir políticas RLS por `user_id` / propietario en las tres tablas
+- [x] Reemplazar `useState` + seed por consultas a Supabase (lectura/escritura por usuario)
+- [x] Reemplazar `uid()` (`Math.random`) por `uuid` generado en base de datos
+- [x] Migrar datos semilla con fechas ISO (`todayISO()` / `YYYY-MM-DD`) y validar estados y fechas (import explícito con botón, nunca automático)
 
 ## Fase 3 — Almacenamiento de CV
 
-- [ ] Crear bucket privado en Supabase Storage segmentado por `user_id`
-- [ ] Validar en cliente PDF/DOCX de máx. 5 MB + reforzar con policy en el bucket
-- [ ] Reemplazar carga simulada por subida real y guardar la URL en `Application.cv`
-- [ ] Permitir previsualizar, descargar y eliminar el CV por postulación
-- [ ] Migrar imágenes de evidencia de data-URL a Storage (hoy `images: string[]` con `TODO` en `src/types.ts` y `App.tsx`)
+- [x] Crear bucket privado en Supabase Storage segmentado por `user_id` (vía UI: el SQL Editor no puede escribir `storage.buckets`, error 42501)
+- [x] Validar en cliente PDF/DOCX de máx. 5 MB + reforzar con policy en el bucket
+- [x] Reemplazar carga simulada por subida real y guardar la URL en `Application.cv`
+- [x] Permitir previsualizar, descargar y eliminar el CV por postulación
+- [x] Migrar imágenes de evidencia de data-URL a Storage (hoy `images: string[]` con `TODO` en `src/types.ts` y `App.tsx`; pendiente agregar mimes de imagen al bucket por UI)
 
 ## Fase 4 — Filtros y búsqueda
 
